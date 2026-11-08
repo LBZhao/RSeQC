@@ -17,7 +17,7 @@ from qcmodule import ireader
 def fasta_iter(infile):
     """Yield the sequences of a FASTA file, one per record.
 
-    Sequences wrapped over several lines are joined. (Before RSeQC 5.1.0
+    Sequences wrapped over several lines are joined. (Before RSeQC 5.1.0+lbzhao
     each line was yielded separately, so wrapped sequences were counted as
     several short reads.)
 

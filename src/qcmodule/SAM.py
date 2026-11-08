@@ -110,7 +110,7 @@ def sampling_percentages(sample_start, sample_end, sample_step):
 
     ``range(sample_start, sample_end, sample_step)`` plus 100. Each step adds
     the reads between the previous percentage and this one, so every read is
-    used exactly once by 100%. (Before RSeQC 5.1.0 each step added the slice
+    used exactly once by 100%. (Before RSeQC 5.1.0+lbzhao each step added the slice
     ``[pertl - sample_step, pertl)``, which skipped reads whenever
     ``sample_start`` differed from ``sample_step`` or ``sample_end`` was below
     100.)
@@ -416,7 +416,7 @@ class ParseBAM(object):
     def calWigSum(self,chrom_sizes, skip_multi=True, q_cut=30):
         """Total aligned bases, using the same read filter as :meth:`bamTowig`.
 
-        (Before RSeQC 5.1.0 multi-mapped reads were identified here by the NH
+        (Before RSeQC 5.1.0+lbzhao multi-mapped reads were identified here by the NH
         tag but in :meth:`bamTowig` by MAPQ, so the normalization total and
         the signal could count different reads.)
         """
@@ -1374,7 +1374,7 @@ class ParseBAM(object):
         * ``partial_novel``: one splice site is annotated;
         * ``complete_novel``: neither splice site is annotated.
 
-        Before RSeQC 5.1.0 ``novel_combination`` junctions were reported as
+        Before RSeQC 5.1.0+lbzhao ``novel_combination`` junctions were reported as
         ``annotated``. Chromosome names are matched case-insensitively and
         written as they appear in the BAM header.
         """

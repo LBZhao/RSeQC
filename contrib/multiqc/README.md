@@ -1,6 +1,6 @@
-# MultiQC support for RSeQC 5.1.0 output
+# MultiQC support for RSeQC 5.1.0+lbzhao output
 
-RSeQC 5.1.0 adds two report categories that MultiQC (tested with 1.35)
+RSeQC 5.1.0+lbzhao adds two report categories that MultiQC (tested with 1.35)
 does not know yet, so it drops them from its report:
 
 | Tool | New output | Effect in MultiQC without the patch |
@@ -16,18 +16,20 @@ parsed exactly as before.
 
 Tested against MultiQC `main` at `a286ece`:
 
-- `multiqc --strict` on RSeQC 5.1.0 output: junction categories sum to
+- `multiqc --strict` on RSeQC 5.1.0+lbzhao output: junction categories sum to
   100% and `Noncoding_Exons` appears in the plot.
 - `multiqc --strict` on RSeQC 5.0.6 output: report unchanged.
 - `ruff check` / `ruff format`: no new findings.
 
-## Submitting
+## Using or submitting the patch
 
-Submit after an official RSeQC release writes these lines, so the pull
-request can name the release:
+The official RSeQC does not write these lines; only this fork does. So:
 
-1. Fork https://github.com/MultiQC/MultiQC and create a branch from `main`.
-2. `git am 0001-rseqc-novel-combination-noncoding.patch`
-3. Open a pull request. MultiQC's tests use example files from
-   https://github.com/MultiQC/test-data; adding RSeQC 5.1.0
-   `junction_annotation` and `read_distribution` output there helps review.
+- **To use it now**, apply the patch to your own MultiQC install:
+  `git clone https://github.com/MultiQC/MultiQC && cd MultiQC &&
+  git am <path>/0001-rseqc-novel-combination-noncoding.patch && pip install .`
+- **To offer it to MultiQC**, fork https://github.com/MultiQC/MultiQC,
+  `git am` the patch on a branch from `main`, and open a pull request that
+  says the output comes from the LBZhao fork of RSeQC. MultiQC may decline
+  support for a fork. Example output for https://github.com/MultiQC/test-data
+  helps review.

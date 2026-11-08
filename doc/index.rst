@@ -6,11 +6,21 @@
 .. toctree::
    :maxdepth: 2
 
-RSeQC
-======
+RSeQC (LBZhao fork)
+===================
 
 Comprehensive Quality Control for Bulk and Single-cell RNA Sequencing
 ---------------------------------------------------------------------
+
+.. NOTE::
+
+   This is the documentation of the **LBZhao fork** of RSeQC
+   (https://github.com/LBZhao/RSeQC), version 5.1.0+lbzhao, branched from
+   RSeQC 5.0.6. It is not the official RSeQC by Liguo Wang
+   (https://github.com/liguowang/RSeQC). Results differ from RSeQC 5.0.6;
+   see the 5.1.0+lbzhao release notes below. When you publish results,
+   cite the RSeQC papers and say that you used this fork and which
+   version or commit.
 
 RSeQC (RNA-seq Quality Control) is a comprehensive Python package for quality
 control of bulk and single-cell RNA sequencing (RNA-seq) data. It provides a
@@ -19,8 +29,9 @@ quality, library complexity, nucleotide composition bias, GC bias, read
 distribution, transcript coverage, strand specificity, RNA integrity,
 sequencing saturation, splice junction annotation, and many other metrics.
 
-RSeQC supports modern Python environments (Python 3.9 or later) and can be
-installed directly from `PyPI <https://pypi.org/project/RSeQC/>`_ or from the `GitHub source repository <https://github.com/liguowang/RSeQC>`_.
+RSeQC supports modern Python environments (Python 3.9 or later). This fork
+is installed from its `GitHub repository <https://github.com/LBZhao/RSeQC>`_;
+it is not on PyPI (``pip install RSeQC`` installs the original RSeQC).
 
 Release history
 ===================
@@ -447,7 +458,7 @@ Install this fork (LBZhao/RSeQC) from GitHub; it is not on PyPI::
 
  pip install git+https://github.com/LBZhao/RSeQC.git
 
-It needs only Python packages; R is not required (since v5.1.0).
+It needs only Python packages; R is not required (since v5.1.0+lbzhao).
 
 ``pip install RSeQC`` installs the original RSeQC from PyPI instead. Both use
 the same package name, so installing one replaces the other in the same
@@ -626,7 +637,7 @@ Options:
                         Alignment file in BAM or SAM format.
   -q MAP_QUAL, --mapq=MAP_QUAL
                         `Minimum mapping quality <http://genome.sph.umich.edu/wiki/Mapping_Quality_Scores>`_ to determine uniquely mapped read.
-  --tsv PATH            Also write the results as a tab-separated table (v5.1.0).
+  --tsv PATH            Also write the results as a tab-separated table (v5.1.0+lbzhao).
 
 Example::
 
@@ -899,7 +910,7 @@ NOTE:
    :width: 1200 px
    :scale: 80 %
 
-(Since v5.1.0 each of the 100 values is the mean coverage of a 1% slice of the
+(Since v5.1.0+lbzhao each of the 100 values is the mean coverage of a 1% slice of the
 mRNA, not the coverage of a single base at each percentile mark.)
 
 Options::
@@ -928,7 +939,7 @@ Options::
   -f, --format {pdf,png,jpeg}
                         Plot output format. Default: pdf
   --skip-plot           Write the data files (and the R script) but no plots.
-  --rscript PATH        Ignored since v5.1.0 (plots are drawn in Python).
+  --rscript PATH        Ignored since v5.1.0+lbzhao (plots are drawn in Python).
 
 Output files (``PREFIX.geneBodyCoverage.*``):
 
@@ -981,7 +992,7 @@ geneBody_coverage2.py
 --------------------------------
 **Calculate the RNA-seq reads coverage over gene body. This module uses bigwig file as input.**
 
-Uses the same method as ``geneBody_coverage.py`` (since v5.1.0): the BigWig
+Uses the same method as ``geneBody_coverage.py`` (since v5.1.0+lbzhao): the BigWig
 signal is read base by base over each transcript's exons only (bases without
 data count as 0; introns are never read), the mRNA is split into 100 equal
 slices, and the mean signal of every slice is taken. Minus-strand transcripts
@@ -1011,7 +1022,7 @@ Options::
                         'auto' uses quartiles of the BED file's transcript
                         lengths; 'none' disables binning. Default: 1000,2000,4000
   --skip-plot           Write the data files (and the R script) but no plots.
-  --rscript PATH        Ignored since v5.1.0 (plots are drawn in Python).
+  --rscript PATH        Ignored since v5.1.0+lbzhao (plots are drawn in Python).
 
 Output files (``PREFIX.geneBodyCoverage.*``):
 
@@ -1081,8 +1092,8 @@ Options:
                         Minimum mapping quality (phred scaled) for an
                         alignment to be considered as "uniquely mapped".
                         default=30
-  --seed INT            Random seed for choosing which genes to sample (v5.1.0).
-  --tsv PATH            Also write the results as a tab-separated table (v5.1.0).
+  --seed INT            Random seed for choosing which genes to sample (v5.1.0+lbzhao).
+  --tsv PATH            Also write the results as a tab-separated table (v5.1.0+lbzhao).
 
 **Example 1: Pair-end non strand specific**::
 
@@ -1248,7 +1259,7 @@ Detected junctions are divided into 4 exclusive categories:
 1. Annotated (known): The junction (intron) is part of the gene model.
 2. Novel_combination: Both splice sites, 5' splice site (5'SS) and 3' splice
    site (3'SS), are annotated, but the gene model never joins them (e.g. exon
-   skipping). Before v5.1.0 these were reported as annotated.
+   skipping). Before v5.1.0+lbzhao these were reported as annotated.
 3. Partial_novel: One of the splice sites (5'SS or 3'SS) is novel, and the other is annotated.
 4. Complete_novel: Both 5'SS and 3'SS are novel.
 
@@ -1481,7 +1492,7 @@ as both exon and intron by two different transcripts) , they are prioritize as:
 CDS exons > UTR exons > Noncoding exons > Introns > Intergenic regions, for example, if a read was mapped to
 both CDS exon and intron, it will be assigned to CDS exons.
 
-* "Noncoding_Exons" (since v5.1.0): exons of non-coding transcripts (BED thickStart == thickEnd). Earlier releases counted them as 5' or 3' UTR.
+* "Noncoding_Exons" (since v5.1.0+lbzhao): exons of non-coding transcripts (BED thickStart == thickEnd). Earlier releases counted them as 5' or 3' UTR.
 * "Total Reads": This does NOT include unmapped, QC-failed, duplicate, secondary, supplementary or low-MAPQ (below ``-q``, default 30) reads
 * "Total Tags": reads spliced once will be counted as 2 tags, reads spliced twice will be counted as 3 tags, etc. And because of this, "Total Tags" >= "Total Reads"
 * "Total Assigned Tags": number of tags that can be unambiguously assigned the 10 groups (see below table).
@@ -1502,7 +1513,7 @@ Options:
   -r REF_GENE_MODEL, --refgene=REF_GENE_MODEL
                         Reference gene model in bed format.
   -q INT, --mapq INT    Minimum mapping quality of reads to count. Default: 30
-  --tsv PATH            Also write the results as a tab-separated table (v5.1.0).
+  --tsv PATH            Also write the results as a tab-separated table (v5.1.0+lbzhao).
 
 Example::
 
@@ -1910,7 +1921,7 @@ This program generates heatmap from a `FASTQ <https://en.wikipedia.org/wiki/FAST
 
 .. NOTE::
 
-   Since v5.1.0 the heatmap is drawn with matplotlib; R and the pheatmap package are not needed. (The example log below is from an earlier release.)
+   Since v5.1.0+lbzhao the heatmap is drawn with matplotlib; R and the pheatmap package are not needed. (The example log below is from an earlier release.)
  
  
 Options:
@@ -1974,7 +1985,7 @@ This program generates heatmaps to visualize where are those **corrections** (i.
 
 .. NOTE::
 
-   Since v5.1.0 the heatmap is drawn with matplotlib; R and the pheatmap package are not needed. (The example log below is from an earlier release.)
+   Since v5.1.0+lbzhao the heatmap is drawn with matplotlib; R and the pheatmap package are not needed. (The example log below is from an earlier release.)
 
 Options:
    --version             show program's version number and exit
@@ -2284,9 +2295,9 @@ Options:
   -c MINIMUM_COVERAGE, --minCov=MINIMUM_COVERAGE
                         Minimum number of read mapped to a transcript.
                         default=10. Transcripts below this get TIN "NA"
-                        (0 before v5.1.0) and are left out of the summary.
+                        (0 before v5.1.0+lbzhao) and are left out of the summary.
   -q INT, --mapq INT    Minimum mapping quality of reads to count (since
-                        v5.1.0; earlier releases counted multi-mapped reads).
+                        v5.1.0+lbzhao; earlier releases counted multi-mapped reads).
                         Default: 30
   -n SAMPLE_SIZE, --sample-size=SAMPLE_SIZE
                         Number of equal-spaced nucleotide positions picked

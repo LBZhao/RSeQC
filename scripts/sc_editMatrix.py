@@ -128,17 +128,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--rscript", default="Rscript", metavar="PATH",
-        help="Ignored: heatmaps are drawn in Python since RSeQC 5.1.0 (R is not needed).",
+        help="Ignored: heatmaps are drawn in Python since RSeQC 5.1.0+lbzhao (R is not needed).",
     )
     parser.add_argument(
         "--install-r-deps", action="store_true",
-        help="Ignored: heatmaps are drawn in Python since RSeQC 5.1.0 (R is not needed).",
+        help="Ignored: heatmaps are drawn in Python since RSeQC 5.1.0+lbzhao (R is not needed).",
     )
     parser.add_argument(
         "--cran-mirror",
         default="https://cloud.r-project.org",
         metavar="URL",
-        help="Ignored: heatmaps are drawn in Python since RSeQC 5.1.0 (R is not needed).",
+        help="Ignored: heatmaps are drawn in Python since RSeQC 5.1.0+lbzhao (R is not needed).",
     )
     parser.add_argument(
         "--verbose", action="store_true",

@@ -239,7 +239,7 @@ def parse_bed12_record(
     ]
 
     # BED [start, end) is 1-based inclusive [start + 1, end]. (Before RSeQC
-    # 5.1.0 this was [start + 1, end + 1], adding 1 bp per exon end that a
+    # 5.1.0+lbzhao this was [start + 1, end + 1], adding 1 bp per exon end that a
     # fragment crossed.)
     exon_ranges = [
         [start + 1, end]

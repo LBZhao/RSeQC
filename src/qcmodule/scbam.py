@@ -26,7 +26,7 @@ _GEM_SUFFIX = re.compile(r"-\d+$")
 def strip_suffix(barcode):
     """Remove the Cell Ranger GEM-well suffix (``-1``, ``-2``, ...).
 
-    Before RSeQC 5.1.0 only ``-1`` was removed, so in aggregated BAM files
+    Before RSeQC 5.1.0+lbzhao only ``-1`` was removed, so in aggregated BAM files
     (``-2``, ``-3``, ...) every barcode was counted as edited.
     """
     return _GEM_SUFFIX.sub("", barcode)
@@ -266,7 +266,7 @@ def mapping_stat(infile,  step_size=50000, CB_tag = 'CB', UMI_tag = 'UB',RE_tag 
     chrM_reads = 0
     #read match type
     read_type = collections.defaultdict(int)
-    # Read names are collected in memory. (Before RSeQC 5.1.0 they went to
+    # Read names are collected in memory. (Before RSeQC 5.1.0+lbzhao they went to
     # per-chromosome temporary files in the working directory, and every
     # matching *.all_reads_id.txt file there was then read and deleted, so
     # two runs in one directory corrupted each other.)

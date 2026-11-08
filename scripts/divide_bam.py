@@ -133,7 +133,7 @@ def divide_bam(
     # Each read name is assigned by hashing it with the seed: mates and
     # secondary/supplementary records of a read land in the same file
     # without keeping every read name in memory (several GB for a typical
-    # BAM file before RSeQC 5.1.0).
+    # BAM file before RSeQC 5.1.0+lbzhao).
     salt = str(random.Random(seed).getrandbits(64)).encode()
     per_file_counts = [0] * len(paths)
     retained_count = 0

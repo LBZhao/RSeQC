@@ -51,7 +51,7 @@ def seq_generator(fastafile):
     any character other than A, C, G or T becomes N, so k-mers across
     ambiguous bases are skipped rather than created by joining lines.
 
-    Before RSeQC 5.1.0, FASTQ quality lines made only of the characters
+    Before RSeQC 5.1.0+lbzhao, FASTQ quality lines made only of the characters
     A/C/G/T/N (valid quality codes) were counted as sequence, quality lines
     starting with ``@`` started a new record, and FASTA lines with any IUPAC
     code were dropped, joining their neighbours into false k-mers.

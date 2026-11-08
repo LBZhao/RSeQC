@@ -19,7 +19,7 @@ from qcmodule import genebody  # noqa: E402
 SCRIPT = ROOT / "scripts" / "geneBody_coverage2.py"
 BW_LENGTH = 100_000
 
-# 150 bp exon, ~10 kb intron, 100 bp exon (250 bp mRNA). The pre-5.1.0
+# 150 bp exon, ~10 kb intron, 100 bp exon (250 bp mRNA). The pre-5.1.0+lbzhao
 # percentile interpolation put percentile 60 at an intronic position here.
 SPLICED_BLOCKS = [(1000, 1150), (11150, 11250)]
 PLUS_BLOCKS = [(20000, 20300), (25000, 25400), (29000, 29300)]     # 1000 bp

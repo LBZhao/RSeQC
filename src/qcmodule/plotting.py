@@ -5,7 +5,7 @@
 
 Each function takes the data a tool computed and writes one or more image
 files. The image format follows the file extension (pdf, png, jpeg, tiff,
-svg; bmp is converted with Pillow). Before RSeQC 5.1.0 the tools wrote R
+svg; bmp is converted with Pillow). Before RSeQC 5.1.0+lbzhao the tools wrote R
 scripts and ran them with Rscript; the R scripts are still written next to
 the data for anyone who wants to restyle a plot in R, but they are no
 longer run.

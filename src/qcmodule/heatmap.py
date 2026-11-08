@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Draw labelled-matrix heatmaps with matplotlib.
 
-Before RSeQC 5.1.0 this ran the R package pheatmap. An equivalent R script
+Before RSeQC 5.1.0+lbzhao this ran the R package pheatmap. An equivalent R script
 is still written next to the image for anyone who prefers R, but it is not
 run and R is not needed.
 """

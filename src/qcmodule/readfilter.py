@@ -15,7 +15,7 @@ that counts reads, fragments or coverage skips them. Tools differ only in
 whether duplicates (0x400) and QC failures (0x200) are also skipped and in
 their mapping-quality cut-off.
 
-Before RSeQC 5.1.0 supplementary alignments were counted by every tool
+Before RSeQC 5.1.0+lbzhao supplementary alignments were counted by every tool
 except ``geneBody_coverage.py``.
 """
 

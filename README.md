@@ -10,7 +10,7 @@ and is not published on PyPI: `pip install rseqc` installs the original.
 The fork's version is `5.1.0+lbzhao`. It fixes several bugs that change
 results (e.g. soft-clipped reads were shifted, supplementary alignments were
 counted as reads, exon-skipping junctions were called known), rewrites gene
-body coverage, and no longer needs R. See the 5.1.0 release notes in
+body coverage, and no longer needs R. See the 5.1.0+lbzhao release notes in
 [`doc/index.rst`](doc/index.rst) for every change. Results differ from RSeQC
 5.0.6; when you publish results, say which one you used.
 
@@ -120,9 +120,16 @@ python3 -c "from importlib.metadata import version; print('RSeQC', version('RSeQ
 
 ---
 
-## License
+## License and modifications
 
 RSeQC is licensed under the **GNU General Public License v3.0 or later (GPL-3.0-or-later)**.
+This fork is distributed under the same license.
+
+**Modification notice:** this is a modified version of RSeQC 5.0.6 by Liguo
+Wang. It was modified by LBZhao starting in November 2026. The changes are
+listed in the 5.1.0+lbzhao release notes in [`doc/index.rst`](doc/index.rst),
+and every change is recorded in this repository's Git history (all commits
+after `da6e868`, "Release RSeQC 5.0.6").
 
 See the `LICENSE` file included with this project for the complete license text.
 

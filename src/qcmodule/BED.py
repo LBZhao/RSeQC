@@ -131,7 +131,7 @@ class ParseBED:
         """Exons of non-coding transcripts (thickStart == thickEnd) as
         ``[chrom, start, end]`` lists.
 
-        Before RSeQC 5.1.0 these exons were reported as 5' or 3' UTR,
+        Before RSeQC 5.1.0+lbzhao these exons were reported as 5' or 3' UTR,
         depending on where the BED file put thickStart/thickEnd.
         """
         ret_lst = []

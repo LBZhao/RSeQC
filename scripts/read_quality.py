@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rscript",
         default="Rscript",
         metavar="PATH",
-        help="Ignored: plots are drawn in Python since RSeQC 5.1.0 (R is not needed).",
+        help="Ignored: plots are drawn in Python since RSeQC 5.1.0+lbzhao (R is not needed).",
     )
     parser.add_argument(
         "--version",

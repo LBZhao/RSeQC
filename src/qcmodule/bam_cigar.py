@@ -22,7 +22,7 @@ first *aligned* reference base: soft-clipped bases are not on the reference
 and do not move the genomic position. ``=`` and ``X`` are aligned bases just
 like ``M``.
 
-Genomic intervals are 0-based, half-open. Before RSeQC 5.1.0 soft clips
+Genomic intervals are 0-based, half-open. Before RSeQC 5.1.0+lbzhao soft clips
 shifted every downstream block and ``=``/``X`` operations were ignored.
 """
 
