@@ -31,3 +31,8 @@ test/
 *.wig
 *.bedGraph
 *.log
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+.pytest_cache/
