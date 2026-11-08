@@ -1,0 +1,110 @@
+From 18946f151119a3d4a71e87c9bb55a203f025dbbe Mon Sep 17 00:00:00 2001
+From: LBZhao <zhaolinbo@gmail.com>
+Date: Sun, 8 Nov 2026 06:15:57 +0000
+Subject: [PATCH] RSeQC: parse novel-combination junctions and non-coding exons
+
+RSeQC 5.1.0 junction_annotation.py reports junctions that join two
+annotated splice sites never paired in the gene model (e.g. exon
+skipping) as 'Novel Combination'; earlier versions counted them as
+known. read_distribution.py adds a 'Noncoding_Exons' row for exons of
+non-coding transcripts, which earlier versions counted as UTR.
+
+Without this, both are dropped from the report: junction categories no
+longer add up to 100% and non-coding tags are missing from the read
+distribution plot. Both fields are optional, so output from older RSeQC
+versions is parsed as before.
+---
+ multiqc/modules/rseqc/junction_annotation.py | 17 ++++++++++++++++-
+ multiqc/modules/rseqc/read_distribution.py   |  4 ++++
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/multiqc/modules/rseqc/junction_annotation.py b/multiqc/modules/rseqc/junction_annotation.py
+index ad1b0ad..57cec68 100644
+--- a/multiqc/modules/rseqc/junction_annotation.py
++++ b/multiqc/modules/rseqc/junction_annotation.py
+@@ -20,10 +20,14 @@ def parse_reports(module: BaseMultiqcModule) -> int:
+         "known_splicing_events": r"^Known Splicing Events:\s*(\d+)$",
+         "partial_novel_splicing_events": r"^Partial Novel Splicing Events:\s*(\d+)$",
+         "novel_splicing_events": r"^Novel Splicing Events:\s*(\d+)$",
++        # RSeQC >= 5.1.0: both splice sites annotated, but never joined in the
++        # gene model (e.g. exon skipping). Earlier versions counted these as known.
++        "novel_combination_splicing_events": r"^Novel Combination Splicing Events:\s*(\d+)$",
+         "total_splicing_junctions": r"^Total splicing  Junctions:\s*(\d+)$",
+         "known_splicing_junctions": r"^Known Splicing Junctions:\s*(\d+)$",
+         "partial_novel_splicing_junctions": r"^Partial Novel Splicing Junctions:\s*(\d+)$",
+         "novel_splicing_junctions": r"^Novel Splicing Junctions:\s*(\d+)$",
++        "novel_combination_splicing_junctions": r"^Novel Combination Splicing Junctions:\s*(\d+)$",
+     }
+ 
+     # Go through files and parse data using regexes
+@@ -43,6 +47,8 @@ def parse_reports(module: BaseMultiqcModule) -> int:
+                 d["partial_novel_splicing_events_pct"] = (float(d["partial_novel_splicing_events"]) / t) * 100.0
+             if "novel_splicing_events" in d:
+                 d["novel_splicing_events_pct"] = (float(d["novel_splicing_events"]) / t) * 100.0
++            if "novel_combination_splicing_events" in d:
++                d["novel_combination_splicing_events_pct"] = (float(d["novel_combination_splicing_events"]) / t) * 100.0
+         if "total_splicing_junctions" in d:
+             t = float(d["total_splicing_junctions"])
+             if "known_splicing_junctions" in d:
+@@ -51,6 +57,10 @@ def parse_reports(module: BaseMultiqcModule) -> int:
+                 d["partial_novel_splicing_junctions_pct"] = (float(d["partial_novel_splicing_junctions"]) / t) * 100.0
+             if "novel_splicing_junctions" in d:
+                 d["novel_splicing_junctions_pct"] = (float(d["novel_splicing_junctions"]) / t) * 100.0
++            if "novel_combination_splicing_junctions" in d:
++                d["novel_combination_splicing_junctions_pct"] = (
++                    float(d["novel_combination_splicing_junctions"]) / t
++                ) * 100.0
+ 
+         if len(d) > 0:
+             if f["s_name"] in junction_annotation_data:
+@@ -75,11 +85,13 @@ def parse_reports(module: BaseMultiqcModule) -> int:
+     keys = [
+         {
+             "known_splicing_junctions": {"name": "Known Splicing Junctions"},
++            "novel_combination_splicing_junctions": {"name": "Novel Combination Splicing Junctions"},
+             "partial_novel_splicing_junctions": {"name": "Partial Novel Splicing Junctions"},
+             "novel_splicing_junctions": {"name": "Novel Splicing Junctions"},
+         },
+         {
+             "known_splicing_events": {"name": "Known Splicing Events"},
++            "novel_combination_splicing_events": {"name": "Novel Combination Splicing Events"},
+             "partial_novel_splicing_events": {"name": "Partial Novel Splicing Events"},
+             "novel_splicing_events": {"name": "Novel Splicing Events"},
+         },
+@@ -97,7 +109,10 @@ def parse_reports(module: BaseMultiqcModule) -> int:
+         description='<a href="http://rseqc.sourceforge.net/#junction-annotation-py" target="_blank">Junction annotation</a>'
+         " compares detected splice junctions to"
+         " a reference gene model. An RNA read can be spliced 2"
+-        " or more times, each time is called a splicing event.",
++        " or more times, each time is called a splicing event."
++        " From RSeQC 5.1.0, junctions joining two annotated splice sites that the"
++        " gene model never pairs (e.g. exon skipping) are reported as novel combinations;"
++        " earlier versions counted them as known.",
+         plot=bargraph.plot([junction_annotation_data, junction_annotation_data], keys, pconfig),
+     )
+ 
+diff --git a/multiqc/modules/rseqc/read_distribution.py b/multiqc/modules/rseqc/read_distribution.py
+index 90751be..a497b67 100644
+--- a/multiqc/modules/rseqc/read_distribution.py
++++ b/multiqc/modules/rseqc/read_distribution.py
+@@ -23,6 +23,9 @@ def parse_reports(module: BaseMultiqcModule) -> int:
+         "cds_exons": r"CDS_Exons\s+(\d+)\s+(\d+)\s+([\d\.]+)\s*",
+         "5_utr_exons": r"5'UTR_Exons\s+(\d+)\s+(\d+)\s+([\d\.]+)\s*",
+         "3_utr_exons": r"3'UTR_Exons\s+(\d+)\s+(\d+)\s+([\d\.]+)\s*",
++        # RSeQC >= 5.1.0: exons of non-coding transcripts. Earlier versions
++        # counted them as 5' or 3' UTR.
++        "noncoding_exons": r"Noncoding_Exons\s+(\d+)\s+(\d+)\s+([\d\.]+)\s*",
+         "introns": r"Introns\s+(\d+)\s+(\d+)\s+([\d\.]+)\s*",
+         "tss_up_1kb": r"TSS_up_1kb\s+(\d+)\s+(\d+)\s+([\d\.]+)\s*",
+         "tss_up_5kb": r"TSS_up_5kb\s+(\d+)\s+(\d+)\s+([\d\.]+)\s*",
+@@ -105,6 +108,7 @@ def parse_reports(module: BaseMultiqcModule) -> int:
+         "cds_exons_tag_count": {"name": "CDS_Exons"},
+         "5_utr_exons_tag_count": {"name": "5'UTR_Exons"},
+         "3_utr_exons_tag_count": {"name": "3'UTR_Exons"},
++        "noncoding_exons_tag_count": {"name": "Noncoding_Exons"},
+         "introns_tag_count": {"name": "Introns"},
+         "tss_up_1kb_tag_count": {"name": "TSS_up_1kb"},
+         "tss_up_1kb-5kb_tag_count": {"name": "TSS_up_1kb-5kb"},
+-- 
+2.43.0
+
