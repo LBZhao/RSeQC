@@ -1,8 +1,10 @@
 cff-version: 1.2.0
 message: >-
-  If you use RSeQC in your research, please cite the following publications.
-title: RSeQC
-version: 5.1.0
+  This is the LBZhao fork of RSeQC (branched from RSeQC 5.0.6). If you use
+  it, please cite the RSeQC publications below and mention the fork and the
+  version or commit you used.
+title: "RSeQC (LBZhao fork)"
+version: 5.1.0+lbzhao
 date-released: 2026-11-08
 type: software
 
@@ -10,10 +12,10 @@ authors:
   - family-names: Wang
     given-names: Liguo
     orcid: https://orcid.org/0000-0002-3473-4904
+  - alias: LBZhao
 
-repository-code: https://github.com/liguowang/RSeQC
-url: https://github.com/liguowang/RSeQC
-repository-artifact: https://pypi.org/project/RSeQC/
+repository-code: https://github.com/LBZhao/RSeQC
+url: https://github.com/LBZhao/RSeQC
 license: GPL-3.0-or-later
 
 keywords:
@@ -95,5 +97,5 @@ references:
     journal: BMC Bioinformatics
     year: 2016
     volume: 17
-    article-number: 58
+    start: 58  # BMC article number
     doi: 10.1186/s12859-016-0922-z

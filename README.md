@@ -1,11 +1,18 @@
-# RSeQC
+# RSeQC (LBZhao fork)
 
-[![PyPI version](https://img.shields.io/pypi/v/RSeQC.svg)](https://pypi.org/project/RSeQC/)
-[![Python Versions](https://img.shields.io/pypi/pyversions/RSeQC.svg)](https://pypi.org/project/RSeQC/)
-[![License](https://img.shields.io/github/license/liguowang/RSeQC)](LICENSE)
-[![CI](https://github.com/liguowang/RSeQC/actions/workflows/ci.yml/badge.svg)](https://github.com/liguowang/RSeQC/actions/workflows/ci.yml)
-[![Documentation](https://img.shields.io/badge/docs-online-blue.svg)](https://www.lwang.org/RSeQC/)
-[![PyPI Downloads](https://static.pepy.tech/badge/rseqc)](https://pepy.tech/projects/rseqc)
+[![License](https://img.shields.io/github/license/LBZhao/RSeQC)](LICENSE)
+[![CI](https://github.com/LBZhao/RSeQC/actions/workflows/ci.yml/badge.svg)](https://github.com/LBZhao/RSeQC/actions/workflows/ci.yml)
+
+This is an independent fork of [RSeQC](https://github.com/liguowang/RSeQC)
+by Liguo Wang, branched from RSeQC 5.0.6. It is **not** the official RSeQC
+and is not published on PyPI: `pip install rseqc` installs the original.
+
+The fork's version is `5.1.0+lbzhao`. It fixes several bugs that change
+results (e.g. soft-clipped reads were shifted, supplementary alignments were
+counted as reads, exon-skipping junctions were called known), rewrites gene
+body coverage, and no longer needs R. See the 5.1.0 release notes in
+[`doc/index.rst`](doc/index.rst) for every change. Results differ from RSeQC
+5.0.6; when you publish results, say which one you used.
 
 ## Requirements
 
@@ -58,48 +65,31 @@ rseqc_env\Scripts\Activate.ps1
 
 ---
 
-## Install RSeQC
+## Install this fork
 
-### Install the latest stable release from [PyPI](https://pypi.org/project/RSeQC/)
-
-```bash
-python3 -m pip install rseqc
-```
-
-### Install the latest development version from GitHub
+Install from GitHub (this fork is not on PyPI):
 
 ```bash
-python3 -m pip install git+https://github.com/liguowang/RSeQC.git
+python3 -m pip install git+https://github.com/LBZhao/RSeQC.git
 ```
 
-You can also install a specific branch, tag, or commit.
-
-Install a specific branch:
+You can also install a specific branch, tag, or commit, for example a
+commit hash for a reproducible analysis:
 
 ```bash
-python3 -m pip install git+https://github.com/liguowang/RSeQC.git@main
+python3 -m pip install git+https://github.com/LBZhao/RSeQC.git@<commit>
 ```
 
-Install a specific release tag:
-
-```bash
-python3 -m pip install git+https://github.com/liguowang/RSeQC.git@v5.0.6
-```
+The fork and the original use the same package name, so installing one
+replaces the other in the same environment. To use the original RSeQC
+instead, run `python3 -m pip install rseqc`.
 
 ---
 
 ## Upgrade RSeQC
 
-Upgrade an existing installation from PyPI:
-
 ```bash
-python3 -m pip install --upgrade rseqc
-```
-
-To upgrade a GitHub installation:
-
-```bash
-python3 -m pip install --upgrade git+https://github.com/liguowang/RSeQC.git
+python3 -m pip install --upgrade git+https://github.com/LBZhao/RSeQC.git
 ```
 
 ---
@@ -140,12 +130,18 @@ See the `LICENSE` file included with this project for the complete license text.
 
 ## Documentation
 
-Documentation and tutorials are available at:
+This fork's documentation, including what changed from 5.0.6, is in
+[`doc/index.rst`](doc/index.rst).
+
+Documentation for the original RSeQC:
 
 1. http://rseqc.sourceforge.net/
 2. https://www.lwang.org/RSeQC/
 
 ## References
+
+If you use this fork, please cite the original RSeQC publications below and
+mention that you used the LBZhao fork (with the version or commit).
 
 1. Wang L, Wang S, Li W. RSeQC: quality control of RNA-seq experiments. Bioinformatics. 2012;28(16):2184-2185. doi:10.1093/bioinformatics/bts356
 2. Wang L, Nie J, Sicotte H, et al. Measure transcript integrity using RNA-seq data. BMC Bioinformatics. 2016;17:58. doi:10.1186/s12859-016-0922-z

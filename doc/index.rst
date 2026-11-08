@@ -25,7 +25,11 @@ installed directly from `PyPI <https://pypi.org/project/RSeQC/>`_ or from the `G
 Release history
 ===================
 
-**RSeQC v5.1.0**
+**RSeQC v5.1.0+lbzhao (LBZhao fork)**
+
+This release is from the `LBZhao fork <https://github.com/LBZhao/RSeQC>`_,
+branched from RSeQC 5.0.6; it is not an official RSeQC release. Install it
+with ``pip install git+https://github.com/LBZhao/RSeQC.git``.
 
 * Nov. 8, 2026
 
@@ -408,17 +412,16 @@ we provide them here to facilitate users with NO WARRANTY in completeness.
 Installation
 ============
 
-Install the latest stable release from PyPI::
+Install this fork (LBZhao/RSeQC) from GitHub; it is not on PyPI::
 
 
- pip install RSeQC
+ pip install git+https://github.com/LBZhao/RSeQC.git
 
-RSeQC needs only Python packages; R is not required (since v5.1.0).
+It needs only Python packages; R is not required (since v5.1.0).
 
-Or install the latest development version from GitHub::
-
-
- pip install git+https://github.com/liguowang/RSeQC.git
+``pip install RSeQC`` installs the original RSeQC from PyPI instead. Both use
+the same package name, so installing one replaces the other in the same
+environment.
 
 
 Use pip2 to install RSeQC (v2.6.6 or older)

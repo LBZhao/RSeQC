@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "RSeQC"
-version = "5.1.0"
-description = "Quality control package for RNA-seq data."
+version = "5.1.0+lbzhao"
+description = "Quality control package for RNA-seq data (LBZhao fork of RSeQC 5.0.6)."
 readme = "README.md"
 requires-python = ">=3.9"
 
@@ -18,7 +18,8 @@ authors = [
 ]
 
 maintainers = [
-    { name = "Liguo Wang", email = "wangliguo78@gmail.com" },
+    # Maintainer of this fork; the original RSeQC is maintained by Liguo Wang.
+    { name = "LBZhao" },
 ]
 
 keywords = [
@@ -54,8 +55,9 @@ classifiers = [
 test = ["pytest"]
 
 [project.urls]
-Homepage = "https://rseqc.sourceforge.net/"
-Documentation = "https://rseqc.sourceforge.net/"
+Homepage = "https://github.com/LBZhao/RSeQC"
+Source = "https://github.com/LBZhao/RSeQC"
+"Original RSeQC" = "https://github.com/liguowang/RSeQC"
 
 [tool.setuptools.packages.find]
 where = ["src"]
