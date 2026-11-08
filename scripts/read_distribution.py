@@ -107,6 +107,7 @@ class DistributionCounts:
     qc_failed_reads: int = 0
     duplicate_reads: int = 0
     secondary_reads: int = 0
+    supplementary_reads: int = 0
     unmapped_reads: int = 0
 
 
@@ -394,6 +395,10 @@ def count_read_distribution(
 
         if aligned_read.is_secondary:
             counts.secondary_reads += 1
+            continue
+
+        if aligned_read.is_supplementary:
+            counts.supplementary_reads += 1
             continue
 
         if aligned_read.is_unmapped:

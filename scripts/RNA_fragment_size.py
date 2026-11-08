@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Iterator, Sequence
 import numpy as np
 import pysam
+
+from qcmodule import readfilter
 from importlib.metadata import version
 
 __version__ = version("RSeQC")
@@ -343,7 +345,7 @@ def fragment_size(
                 if aligned_read.is_duplicate:
                     continue
 
-                if aligned_read.is_secondary:
+                if readfilter.is_non_primary(aligned_read):
                     continue
 
                 if aligned_read.mapping_quality < qcut:

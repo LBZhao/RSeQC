@@ -26,6 +26,7 @@ import pysam
 from bx.intervals.intersection import Intersecter, Interval
 from qcmodule import BED
 from qcmodule import getBamFiles
+from qcmodule import readfilter
 from importlib.metadata import version
 
 __version__ = version("RSeQC")
@@ -226,7 +227,7 @@ def estimate_bg_noise(
             continue
         if aligned_read.is_unmapped:
             continue
-        if aligned_read.is_secondary:
+        if readfilter.is_non_primary(aligned_read):
             continue
 
         read_start = aligned_read.reference_start
@@ -343,7 +344,7 @@ def check_min_reads(
                 continue
             if aligned_read.is_unmapped:
                 continue
-            if aligned_read.is_secondary:
+            if readfilter.is_non_primary(aligned_read):
                 continue
 
             read_start = aligned_read.reference_start
@@ -397,7 +398,7 @@ def genebody_coverage(
                     continue
                 if pileup_read.alignment.is_qcfail:
                     continue
-                if pileup_read.alignment.is_secondary:
+                if readfilter.is_non_primary(pileup_read.alignment):
                     continue
                 if pileup_read.alignment.is_unmapped:
                     continue

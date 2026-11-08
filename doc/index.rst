@@ -68,6 +68,23 @@ Release history
   outputs and ``--length-bins``, ``--transcript-norm``, ``--min-coverage``
   and ``-l/--minimum-length`` options match ``geneBody_coverage.py``.
 
+* Fixed read coordinates in every tool that uses aligned blocks or introns
+  (``bam2wig``, ``read_distribution``, ``read_duplication``,
+  ``inner_distance``, ``RPKM_saturation``, ``junction_annotation``,
+  ``junction_saturation``, ``bam_stat``). Results change for most BAM files:
+
+  * Soft-clipped bases at the start of a read shifted all of its aligned
+    blocks downstream by the clip length. STAR soft-clips by default, so
+    coverage tracks and feature assignment were affected for most STAR BAMs.
+  * ``=`` and ``X`` CIGAR operations (e.g. ``minimap2 --eqx``) were ignored:
+    such reads added no coverage and their intron coordinates were wrong.
+
+* Supplementary (chimeric, flag 0x800) alignments are no longer counted as
+  extra reads. ``bam_stat.py`` reports them on a new ``Supplementary hits:``
+  line instead of counting them as unique reads, and ``bam2fq.py`` no
+  longer writes secondary or supplementary records as extra FASTQ entries.
+  The rules are shared by all tools (``qcmodule.readfilter``).
+
 * Added unit and end-to-end tests (``tests/``), run in CI.
 
 **RSeQC v5.0.6**
@@ -516,6 +533,7 @@ Example::
  QC failed:                   			0
  Optical/PCR duplicate:       			0
  Non Primary Hits             			8720455
+ Supplementary hits:           			0
  Unmapped reads:               			0
 
  mapq < mapq_cut (non-unique): 			3127757

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Sequence
 from bx.intervals.intersection import Intersecter, Interval
 from qcmodule import SAM
+from qcmodule import readfilter
 from importlib.metadata import version
 
 __version__ = version("RSeQC")
@@ -224,7 +225,7 @@ def alignment_passes_legacy_filters(
     if aligned_read.is_duplicate:
         return False
 
-    if aligned_read.is_secondary:
+    if readfilter.is_non_primary(aligned_read):
         return False
 
     if skip_multi and aligned_read.mapq < map_qual:

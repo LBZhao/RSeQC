@@ -23,6 +23,7 @@ import pysam
 from qcmodule import mystat
 from qcmodule import fasta
 from qcmodule import bam_cigar
+from qcmodule import readfilter
 from qcmodule import BED
 from importlib.metadata import version
 
@@ -2311,6 +2312,7 @@ class ParseBAM(object):
         R_qc_fail=0
         R_duplicate=0
         R_nonprimary=0
+        R_supplementary=0
         R_unmap =0
         
         R_multipleHit=0
@@ -2344,6 +2346,9 @@ class ParseBAM(object):
                     continue
                 if aligned_read.is_secondary:       #skip non primary hit
                     R_nonprimary +=1
+                    continue
+                if aligned_read.is_supplementary:   #skip supplementary (chimeric) hit
+                    R_supplementary +=1
                     continue
                 if aligned_read.is_unmapped:        #skip unmap read
                     R_unmap +=1
@@ -2388,6 +2393,7 @@ class ParseBAM(object):
         print("%-40s%d" % ("QC failed:",R_qc_fail), file=sys.stdout)
         print("%-40s%d" % ("Optical/PCR duplicate:", R_duplicate), file=sys.stdout)
         print("%-40s%d" % ("Non primary hits", R_nonprimary), file=sys.stdout)
+        print("%-40s%d" % ("Supplementary hits:", R_supplementary), file=sys.stdout)
         print("%-40s%d" % ("Unmapped reads:",R_unmap), file=sys.stdout)
         print("%-40s%d" % ("mapq < mapq_cut (non-unique):",R_multipleHit), file=sys.stdout)
         print("\n", end='', file=sys.stdout)
@@ -2441,16 +2447,8 @@ class ParseBAM(object):
                 if count >= sample_size:
                     break
                 aligned_read = next(self.samfile)
-                if aligned_read.is_qcfail:          #skip low quanlity
-                    continue
-                if aligned_read.is_duplicate:       #skip duplicate read
-                    continue
-                if aligned_read.is_secondary:       #skip non primary hit
-                    continue
-                if aligned_read.is_unmapped:        #skip unmap read
-                    continue        
-                if aligned_read.mapq < q_cut:
-                    continue                                                        
+                if not readfilter.passes(aligned_read, min_mapq=q_cut):
+                    continue                        #unmapped, secondary, supplementary, QC-failed, duplicate or low MAPQ
                 
                 chrom = self.samfile.getrname(aligned_read.tid)
                 if aligned_read.is_paired:
@@ -2555,10 +2553,7 @@ class ParseBAM(object):
             Rwig = collections.defaultdict(int)
             alignedReads = self.samfile.fetch(chr_name,0,chr_size)      
             for aligned_read in alignedReads:
-                if aligned_read.is_qcfail:continue          #skip low quanlity
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 
                 if skip_multi:
                     if aligned_read.mapq < q_cut:
@@ -2634,10 +2629,7 @@ class ParseBAM(object):
             alignedReads = self.samfile.fetch(chr_name,0,chr_size)      
             for aligned_read in alignedReads:
                 flag=0
-                if aligned_read.is_qcfail:continue          #skip low quanlity
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 
                 if skip_multi:
                     if len(aligned_read.tags)>0:        #( ("NM", 1),("RG", "L1") )
@@ -2714,6 +2706,10 @@ class ParseBAM(object):
                 encoding="ascii",
             ) as out2:
                 for aligned_read in self.samfile:
+                    # Write each read once: secondary/supplementary records
+                    # repeat (or hold only part of) the primary read.
+                    if readfilter.is_non_primary(aligned_read):
+                        continue
                     read_name, read_seq, read_qual = fastq_values(aligned_read)
 
                     if aligned_read.is_read1:
@@ -2744,6 +2740,10 @@ class ParseBAM(object):
 
             with open(output_path, "w", encoding="ascii") as output:
                 for aligned_read in self.samfile:
+                    # Write each read once: secondary/supplementary records
+                    # repeat (or hold only part of) the primary read.
+                    if readfilter.is_non_primary(aligned_read):
+                        continue
                     read_name, read_seq, read_qual = fastq_values(aligned_read)
                     write_fastq(output, read_name, read_seq, read_qual)
                     read_count += 1
@@ -2796,10 +2796,7 @@ class ParseBAM(object):
             while(1):
                 flag=0
                 aligned_read = next(self.samfile)
-                if aligned_read.is_qcfail:continue          #skip low quanlity                  
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
 
                 if len(aligned_read.tags)>0:        #( ("NM", 1),("RG", "L1") )
                     for i in aligned_read.tags:
@@ -2963,6 +2960,7 @@ class ParseBAM(object):
         try:
             while(1):
                 aligned_read = next(self.samfile)
+                if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                 if aligned_read.mapq < q_cut: continue
                 #if aligned_read.is_unmapped:continue   #skip unmapped read
                 #if aligned_read.is_qcfail:continue #skip low quality
@@ -3051,6 +3049,7 @@ class ParseBAM(object):
         try:
             while(1):
                 aligned_read = next(self.samfile)
+                if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                 if aligned_read.mapq < q_cut: continue
                 #if aligned_read.is_unmapped:continue   #skip unmapped read
                 #if aligned_read.is_qcfail:continue     #skip low quality
@@ -3121,6 +3120,7 @@ class ParseBAM(object):
         try:
             while(1):
                 aligned_read = next(self.samfile)
+                if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                 if aligned_read.is_unmapped:continue    #skip unmapped read
                 if aligned_read.is_qcfail:continue      #skip low quality
                 if aligned_read.mapq < q_cut: continue
@@ -3171,6 +3171,7 @@ class ParseBAM(object):
             while(1):
                 exon_boundary=""
                 aligned_read = next(self.samfile)
+                if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                 if aligned_read.is_unmapped:continue    #skip unmapped read
                 if aligned_read.is_qcfail:continue      #skip low quality
                 if aligned_read.mapq < q_cut: continue
@@ -3251,6 +3252,7 @@ class ParseBAM(object):
             try:
                 while True:
                     aligned_read = next(self.samfile)
+                    if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                     if aligned_read.mapq < q_cut:
                         continue
                     if aligned_read.is_unmapped:
@@ -3336,6 +3338,7 @@ class ParseBAM(object):
             try:
                 while True:
                     aligned_read = next(self.samfile)
+                    if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                     if aligned_read.mapq < q_cut:
                         continue
                     if aligned_read.is_unmapped:
@@ -3491,6 +3494,7 @@ class ParseBAM(object):
             try:
                 while(1):
                     aligned_read = next(self.samfile)
+                    if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                     if aligned_read.mapq < q_cut: continue
                     if aligned_read.is_unmapped:continue    #skip unmapped read
                     if aligned_read.is_qcfail:continue      #skip low quality
@@ -3533,6 +3537,7 @@ class ParseBAM(object):
             try:
                 while(1):
                     aligned_read = next(self.samfile)
+                    if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                     if aligned_read.mapq < q_cut: continue
                     if aligned_read.is_unmapped:continue    #skip unmapped read
                     if aligned_read.is_qcfail:continue      #skip low quality
@@ -3613,10 +3618,7 @@ class ParseBAM(object):
         try:
             while(1):
                 aligned_read = next(self.samfile)
-                if aligned_read.is_qcfail:continue          #skip low quanlity                  
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 totalReads +=1
 
                 chrom = self.samfile.getrname(aligned_read.tid).upper()
@@ -3736,10 +3738,7 @@ class ParseBAM(object):
                     break
                 splice_intron_size=0
                 aligned_read = next(self.samfile)
-                if aligned_read.is_qcfail:continue          #skip low quanlity                  
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 if not aligned_read.is_paired: continue     #skip single map read
                 if aligned_read.mate_is_unmapped:continue   #
                 if aligned_read.mapq < q_cut:continue
@@ -3914,10 +3913,7 @@ class ParseBAM(object):
         try:
             while(1):
                 aligned_read = next(self.samfile)
-                if aligned_read.is_qcfail:continue          #skip low quanlity                  
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 if aligned_read.mapq < q_cut:continue
 
                 chrom = self.samfile.getrname(aligned_read.tid).upper()
@@ -4013,10 +4009,7 @@ class ParseBAM(object):
         except:
             return junc_freq
         for aligned_read in alignedReads:
-            if aligned_read.is_qcfail:continue          #skip low quanlity                  
-            if aligned_read.is_duplicate:continue       #skip duplicate read
-            if aligned_read.is_secondary:continue       #skip non primary hit
-            if aligned_read.is_unmapped:continue        #skip unmap read
+            if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
             if aligned_read.mapq < q_cut:continue
 
             intron_blocks = bam_cigar.fetch_intron(chrom, aligned_read.pos, aligned_read.cigar)         
@@ -4091,10 +4084,7 @@ class ParseBAM(object):
                     continue
                 if chrom not in chrom_list:
                     continue                
-                if aligned_read.is_qcfail:continue          #skip low quanlity                  
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 if aligned_read.mapq < q_cut: continue
                 
                 hit_st = aligned_read.pos
@@ -4207,10 +4197,7 @@ class ParseBAM(object):
         try:
             while(1):
                 aligned_read = next(self.samfile)
-                if aligned_read.is_qcfail:continue          #skip low quanlity                  
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 
                 if skip_multi:
                     if aligned_read.mapq < q_cut:
@@ -4386,10 +4373,7 @@ class ParseBAM(object):
             while(1):
                 flag=0
                 aligned_read = next(self.samfile)
-                if aligned_read.is_qcfail:continue          #skip low quanlity                  
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 
                 if skip_multi:
                     if len(aligned_read.tags)>0:        #( ("NM", 1),("RG", "L1") )
@@ -4545,10 +4529,7 @@ class ParseBAM(object):
                     print("Total reads used: " + str(count), file=sys.stderr)
                     break
                 aligned_read = next(self.samfile)
-                if aligned_read.is_qcfail:continue          #skip low quanlity                  
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 if aligned_read.mapq < q_cut: continue
                 if aligned_read.is_reverse:
                     strand = '-'
@@ -4685,10 +4666,7 @@ class ParseBAM(object):
                     print("Total reads used: " + str(count), file=sys.stderr)
                     break
                 aligned_read = next(self.samfile)
-                if aligned_read.is_qcfail:continue          #skip low quanlity                  
-                if aligned_read.is_duplicate:continue       #skip duplicate read
-                if aligned_read.is_secondary:continue       #skip non primary hit
-                if aligned_read.is_unmapped:continue        #skip unmap read
+                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
                 if aligned_read.mapq < q_cut: continue
                 if aligned_read.is_reverse:
                     strand = '-'

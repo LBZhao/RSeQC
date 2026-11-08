@@ -31,12 +31,13 @@ from typing import Iterable, Sequence, TextIO
 import numpy as np
 import pysam
 
+from qcmodule import readfilter
+
 N_BINS = 100
 DEFAULT_LENGTH_EDGES: tuple[int, ...] = (1000, 2000, 4000)
 
-# Unmapped (0x4), secondary (0x100), QC fail (0x200), duplicate (0x400),
-# supplementary (0x800).
-EXCLUDED_FLAGS = 0x4 | 0x100 | 0x200 | 0x400 | 0x800
+# Unmapped, secondary, supplementary, QC-failed and duplicate records.
+EXCLUDED_FLAGS = readfilter.DEFAULT_EXCLUDE
 
 # Flush accumulated block coordinates into the coverage array this often so
 # memory stays bounded inside very deeply covered clusters.
