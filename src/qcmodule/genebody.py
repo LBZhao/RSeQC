@@ -15,6 +15,9 @@ Algorithm overview
    the mRNA and the mean coverage of every slice is taken. Minus-strand
    profiles are reversed so slice 1 is always the 5' end.
 4. Profiles are aggregated across transcripts, overall and by mRNA length.
+
+For BigWig input (geneBody_coverage2.py) step 2 is replaced by reading the
+per-base signal over each exon block; steps 3 and 4 are the same.
 """
 
 from __future__ import annotations
@@ -327,6 +330,34 @@ def region_coverage(
     return np.cumsum(diff[:span])
 
 
+def slice_profile(
+    exonic: np.ndarray,
+    strand: str,
+    n_bins: int = N_BINS,
+    *,
+    tid: str = "transcript",
+) -> tuple[np.ndarray, float]:
+    """Return the 5'->3' slice-mean profile and mean of per-base *exonic* values.
+
+    *exonic* holds one value per mRNA base, in genomic (left to right) order.
+    It is split into *n_bins* slices whose sizes differ by at most one base,
+    and the mean of every slice is taken. Minus-strand profiles are reversed
+    so slice 1 is always the 5' end.
+    """
+    length = exonic.size
+    if length < n_bins:
+        raise ValueError(f"transcript {tid} is shorter than {n_bins} bp")
+
+    edges = (np.arange(n_bins + 1, dtype=np.int64) * length) // n_bins
+    cumulative = np.concatenate(([0.0], np.cumsum(exonic, dtype=np.float64)))
+    profile = (cumulative[edges[1:]] - cumulative[edges[:-1]]) / np.diff(edges)
+
+    if strand == "-":
+        profile = profile[::-1]
+
+    return profile, float(cumulative[-1] / length)
+
+
 def transcript_profile(
     coverage: np.ndarray,
     region_start: int,
@@ -344,20 +375,40 @@ def transcript_profile(
             for block_start, block_end in transcript.blocks
         ]
     )
-    length = exonic.size
-    if length < n_bins:
-        raise ValueError(
-            f"transcript {transcript.tid} is shorter than {n_bins} bp"
+    return slice_profile(exonic, transcript.strand, n_bins, tid=transcript.tid)
+
+
+def bigwig_exonic_values(bigwig, transcript: Transcript) -> np.ndarray:
+    """Per-base BigWig signal over a transcript's exons, in genomic order.
+
+    *bigwig* is an open ``pyBigWig`` file. Bases without data (NaN) count
+    as 0. Intronic positions are never read.
+    """
+    import pyBigWig
+
+    kwargs = {"numpy": True} if pyBigWig.numpy else {}
+    parts = [
+        np.asarray(
+            bigwig.values(transcript.chrom, block_start, block_end, **kwargs),
+            dtype=np.float64,
         )
+        for block_start, block_end in transcript.blocks
+    ]
+    return np.nan_to_num(np.concatenate(parts), nan=0.0)
 
-    edges = (np.arange(n_bins + 1, dtype=np.int64) * length) // n_bins
-    cumulative = np.concatenate(([0.0], np.cumsum(exonic, dtype=np.float64)))
-    profile = (cumulative[edges[1:]] - cumulative[edges[:-1]]) / np.diff(edges)
 
-    if transcript.strand == "-":
-        profile = profile[::-1]
-
-    return profile, float(cumulative[-1] / length)
+def bigwig_profile(
+    bigwig,
+    transcript: Transcript,
+    n_bins: int = N_BINS,
+) -> tuple[np.ndarray, float]:
+    """Return the 5'->3' slice-mean profile and mean signal from a BigWig."""
+    return slice_profile(
+        bigwig_exonic_values(bigwig, transcript),
+        transcript.strand,
+        n_bins,
+        tid=transcript.tid,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -389,6 +440,7 @@ class SampleResult:
     by_length: list[ProfileSum]
     n_low_coverage: int = 0
     n_missing_chrom: int = 0
+    n_out_of_range: int = 0
 
 
 def compute_sample(
@@ -483,6 +535,84 @@ def compute_sample(
     return result
 
 
+def compute_bigwig_sample(
+    bigwig_path: Path | str,
+    name: str,
+    transcripts: Sequence[Transcript],
+    *,
+    length_edges: Sequence[int],
+    transcript_norm: str = "none",
+    min_coverage: float = 0.0,
+    progress: TextIO | None = None,
+) -> SampleResult:
+    """Compute overall and length-binned gene-body profiles from a BigWig.
+
+    Same slicing as :func:`compute_sample`, but the per-base values are read
+    from the BigWig signal over each transcript's exons (NaN counts as 0).
+    With ``transcript_norm="none"`` (the default here, as in earlier
+    releases) raw signal is summed across transcripts. Transcripts on
+    chromosomes absent from the BigWig, or extending past the chromosome end,
+    are skipped and counted.
+    """
+    import pyBigWig
+
+    if transcript_norm not in ("mean", "none"):
+        raise ValueError(f"unknown transcript normalization: {transcript_norm}")
+
+    result = SampleResult(
+        name=name,
+        bam=str(bigwig_path),
+        overall=ProfileSum(),
+        by_length=[ProfileSum() for _ in range(len(length_edges) + 1)],
+    )
+
+    bigwig = pyBigWig.open(str(bigwig_path), "r")
+    if bigwig is None:
+        raise OSError(f"could not open BigWig file: {bigwig_path}")
+
+    try:
+        chrom_sizes = bigwig.chroms()
+        for done, tx in enumerate(transcripts, start=1):
+            size = chrom_sizes.get(tx.chrom)
+            if size is None:
+                result.n_missing_chrom += 1
+                continue
+            if tx.end > size:
+                result.n_out_of_range += 1
+                continue
+
+            profile, mean_signal = bigwig_profile(bigwig, tx)
+            if mean_signal <= 0 and transcript_norm == "mean":
+                result.n_low_coverage += 1
+                continue
+            if mean_signal < min_coverage:
+                result.n_low_coverage += 1
+                continue
+
+            if transcript_norm == "mean":
+                profile = profile / profile.mean()
+
+            bin_index = (
+                assign_length_bin(tx.length, length_edges) if length_edges else 0
+            )
+            result.overall.add(profile)
+            result.by_length[bin_index].add(profile)
+
+            if progress is not None and done % 1000 == 0:
+                print(
+                    f"\t{done} of {len(transcripts)} transcripts finished\r",
+                    end="",
+                    file=progress,
+                )
+    finally:
+        bigwig.close()
+
+    if progress is not None:
+        print(file=progress)
+
+    return result
+
+
 _WORKER_CLUSTERS: list[Cluster] = []
 
 
@@ -554,3 +684,74 @@ def bias_rank_key(profile: Sequence[float]) -> float:
     if ratio == 0 or math.isinf(ratio):
         return math.inf
     return abs(math.log2(ratio))
+
+
+# --------------------------------------------------------------------------
+# Shared table writers
+# --------------------------------------------------------------------------
+
+
+def fmt(value: float) -> str:
+    """Format a number for output tables (NA / Inf for non-finite values)."""
+    if math.isnan(value):
+        return "NA"
+    if math.isinf(value):
+        return "Inf" if value > 0 else "-Inf"
+    return f"{value:.6g}"
+
+
+def write_length_profiles(
+    path: Path,
+    results: Sequence[SampleResult],
+    labels: Sequence[str],
+    transcript_norm: str,
+) -> None:
+    with path.open("w", encoding="utf-8") as output:
+        print(
+            "Sample\tLengthBin\tnTranscripts\t"
+            + "\t".join(str(i) for i in range(1, 101)),
+            file=output,
+        )
+        for result in results:
+            for label, profile_sum in zip(labels, result.by_length):
+                profile = profile_sum.result(transcript_norm)
+                values = (
+                    "\t".join(fmt(v) for v in profile)
+                    if profile_sum.n
+                    else "\t".join(["NA"] * 100)
+                )
+                print(
+                    f"{result.name}\t{label}\t{profile_sum.n}\t{values}",
+                    file=output,
+                )
+
+
+def write_metrics(
+    path: Path,
+    results: Sequence[SampleResult],
+    labels: Sequence[str],
+    transcript_norm: str,
+) -> None:
+    with path.open("w", encoding="utf-8") as output:
+        print(
+            "Sample\tLengthBin\tnTranscripts\tRatio3to5\tUniformityCV\t"
+            "Skewness_deprecated",
+            file=output,
+        )
+        for result in results:
+            groups = [("all", result.overall)] + list(
+                zip(labels, result.by_length)
+            )
+            for label, profile_sum in groups:
+                if profile_sum.n:
+                    profile = profile_sum.result(transcript_norm)
+                    ratio = ratio_3to5(profile)
+                    cv = uniformity_cv(profile)
+                    skew = pearson_moment_coefficient(profile)
+                else:
+                    ratio = cv = skew = math.nan
+                print(
+                    f"{result.name}\t{label}\t{profile_sum.n}\t"
+                    f"{fmt(ratio)}\t{fmt(cv)}\t{fmt(skew)}",
+                    file=output,
+                )

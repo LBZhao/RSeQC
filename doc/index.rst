@@ -60,6 +60,14 @@ Release history
   * The log is written to ``PREFIX.geneBodyCoverage.log.txt`` instead of
     ``log.txt`` in the working directory.
 
+* ``geneBody_coverage2.py`` (BigWig input) now uses the same slice-mean
+  method: signal is read over exons only and averaged over 100 equal slices
+  of the mRNA. The old percentile sampling could pick intronic positions at
+  splice junctions. ``*.geneBodyCoverage.txt`` keeps its layout; new
+  ``*.geneBodyCoverage.metrics.txt`` and ``*.geneBodyCoverage.byLength.txt``
+  outputs and ``--length-bins``, ``--transcript-norm``, ``--min-coverage``
+  and ``-l/--minimum-length`` options match ``geneBody_coverage.py``.
+
 * Added unit and end-to-end tests (``tests/``), run in CI.
 
 **RSeQC v5.0.6**
@@ -850,18 +858,53 @@ geneBody_coverage2.py
 --------------------------------
 **Calculate the RNA-seq reads coverage over gene body. This module uses bigwig file as input.**
 
-Options:
-  --version             show program's version number and exit
-  -h, --help            show this help message and exit
-  -i INPUT_FILE, --input-file=INPUT_FILE
-                        Coverage signal file in bigwig format
-  -r REF_GENE_MODEL, --refgene=REF_GENE_MODEL
-                        Reference gene model in bed format. [required]
-  -o OUTPUT_PREFIX, --out-prefix=OUTPUT_PREFIX
-                        Prefix of output files(s). [required]
-  -t GRAPH_TYPE, --graph-type=GRAPH_TYPE
-                        Graphic file type in "pdf", "jpeg", "bmp", "bmp",
-                        "tiff" or "png".default=png [optional]
+Uses the same method as ``geneBody_coverage.py`` (since v5.1.0): the BigWig
+signal is read base by base over each transcript's exons only (bases without
+data count as 0; introns are never read), the mRNA is split into 100 equal
+slices, and the mean signal of every slice is taken. Minus-strand transcripts
+are reversed so slice 1 is always the 5' end. By default raw slice means are
+summed across transcripts, as in earlier releases (``--transcript-norm
+none``).
+
+Options::
+
+  -i, --input-file INPUT_FILE
+                        Coverage signal file in BigWig format.
+  -r, --refgene REF_GENE_MODEL
+                        Reference gene model in BED12 format.
+  -o, --out-prefix OUTPUT_PREFIX
+                        Prefix for generated output files.
+  -t, --graph-type {pdf,png,bmp,jpeg,tiff}
+                        Plot file type. Default: pdf
+  -l, --minimum-length INT
+                        Minimum mRNA (exonic) length in bp (>= 100). Default: 100
+  --transcript-norm {none,mean}
+                        'none': sum raw signal across transcripts (as in
+                        earlier releases). 'mean': scale each transcript to
+                        its own mean first. Default: none
+  --min-coverage FLOAT  Skip transcripts whose mean exonic signal is below
+                        this. Default: 0
+  --length-bins EDGES   mRNA length bin edges in bp, e.g. '1000,2000,4000';
+                        'auto' uses quartiles of the BED file's transcript
+                        lengths; 'none' disables binning. Default: 1000,2000,4000
+  --skip-plot           Generate data and R code but do not run R.
+  --rscript PATH        Rscript executable to use. Default: Rscript
+
+Output files (``PREFIX.geneBodyCoverage.*``):
+
+ * ``txt``: the 100-slice profile (``percentile`` 0-99 and ``count``; same
+   layout as earlier releases).
+ * ``metrics.txt``: 3'/5' ratio and uniformity CV, overall and per length bin
+   (same columns as ``geneBody_coverage.py``).
+ * ``byLength.txt``: profile per length bin, with transcript counts.
+ * ``_plot.r`` and the plot (average signal per transcript).
+
+NOTE:
+
+ * Results differ from RSeQC <= 5.0.6, which sampled one base per percentile
+   and interpolated genomic coordinates, so points at splice junctions could
+   fall inside introns. Identical BED records are now counted once, and
+   transcripts on chromosomes absent from the BigWig are reported.
 
 infer_experiment.py
 ---------------------------------

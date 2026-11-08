@@ -3,10 +3,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2010–2026 Liguo Wang
 
-"""Calculate RNA-seq coverage across the gene body from a BigWig file.
+"""Calculate RNA-seq coverage across the gene body (5' -> 3') from a BigWig.
 
-The transcript-coordinate construction, 100-point percentile sampling, and
-coverage aggregation algorithm are preserved from the original implementation.
+Each transcript's exonic sequence is split into 100 equal slices and the
+mean BigWig signal of every slice is measured (bases without data count as
+0; introns are never read). By default the raw slice means are summed over
+all transcripts, as in earlier releases. Profiles are also reported by mRNA
+length, together with a 3'/5' ratio and a uniformity CV.
 """
 
 from __future__ import annotations
@@ -15,13 +18,13 @@ import argparse
 import shutil
 import subprocess
 import sys
-from collections import defaultdict
+from importlib.metadata import version
 from pathlib import Path
 from typing import Sequence
+
 import numpy as np
-import pyBigWig
-from qcmodule import mystat
-from importlib.metadata import version
+
+from qcmodule import genebody
 
 __version__ = version("RSeQC")
 __author__ = "Liguo Wang, Santiago Revale"
@@ -63,6 +66,50 @@ def build_parser() -> argparse.ArgumentParser:
         help="Plot file type. Default: %(default)s",
     )
     parser.add_argument(
+        "-l",
+        "--minimum-length",
+        dest="min_mrna_length",
+        type=int,
+        default=100,
+        metavar="INT",
+        help=(
+            "Minimum mRNA (exonic) length in bp. Values below 100 are not "
+            "allowed. Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--transcript-norm",
+        choices=("none", "mean"),
+        default="none",
+        help=(
+            "How transcripts are combined. 'none': sum raw signal across "
+            "transcripts (as in earlier releases). 'mean': scale each "
+            "transcript's profile to its own mean first, so every transcript "
+            "has equal weight. Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--min-coverage",
+        type=float,
+        default=0.0,
+        metavar="FLOAT",
+        help=(
+            "Skip transcripts whose mean exonic signal is below this. "
+            "Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
+        "--length-bins",
+        default="1000,2000,4000",
+        metavar="EDGES",
+        help=(
+            "mRNA length bin edges in bp, comma separated (half-open bins, "
+            "e.g. '1000,2000,4000' gives <1kb, 1-2kb, 2-4kb, >=4kb). 'auto' "
+            "uses the quartiles of transcript lengths in the BED file; 'none' "
+            "disables length binning. Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
         "--skip-plot",
         action="store_true",
         help="Generate data and R code but do not execute the R script.",
@@ -92,6 +139,17 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
             f"reference BED12 file does not exist: {args.ref_gene_model}"
         )
 
+    if args.min_mrna_length < 100:
+        parser.error("--minimum-length cannot be smaller than 100")
+
+    if args.min_coverage < 0:
+        parser.error("--min-coverage cannot be negative")
+
+    try:
+        args.length_edges = genebody.parse_length_edges(args.length_bins)
+    except ValueError as exc:
+        parser.error(f"--length-bins: {exc}")
+
     output_parent = args.output_prefix.parent
     if not output_parent.exists():
         parser.error(f"output directory does not exist: {output_parent}")
@@ -100,56 +158,55 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error(f"output parent is not a directory: {output_parent}")
 
 
-def parse_bed12_line(
-    line: str,
-    *,
+def sample_name(path: Path) -> str:
+    """Sample label for output tables: the BigWig file name without suffix."""
+    name = Path(path).name
+    for suffix in (".bigwig", ".bigWig", ".BigWig", ".bw"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)] or "sample"
+    return Path(path).stem or "sample"
+
+
+def resolve_length_edges(spec: list[int] | str, lengths: Sequence[int]) -> list[int]:
+    """Turn a parsed ``--length-bins`` value into concrete bin edges."""
+    if spec == "none":
+        return []
+    if spec == "auto":
+        return genebody.auto_length_edges(lengths)
+    return list(spec)
+
+
+def write_coverage_table(path: Path, profile: Sequence[float]) -> None:
+    """Write the 100-value profile (same layout as earlier releases)."""
+    with path.open("w", encoding="utf-8") as output:
+        output.write("percentile\tcount\n")
+        for index, value in enumerate(profile):
+            output.write(f"{index}\t{float(value)}\n")
+
+
+def write_r_script(
     path: Path,
-    line_number: int,
-) -> tuple[str, int, int, str, str, list[int], list[int]]:
-    """Parse one BED12 record using the original coordinate calculations."""
-    fields = line.split()
-
-    if len(fields) < 12:
-        raise ValueError(
-            f"{path}:{line_number}: expected 12 BED columns, "
-            f"found {len(fields)}"
+    profile: Sequence[float],
+    n_transcripts: int,
+    plot_file: str,
+    graph_type: str,
+    ylab: str = "average wigsum",
+) -> None:
+    """Write the R plotting script (same plot as earlier releases)."""
+    y_values = ",".join(str(float(value)) for value in profile)
+    with path.open("w", encoding="utf-8") as output:
+        output.write(f"{graph_type}('{plot_file}')\n")
+        output.write("x=1:100\n")
+        output.write(f"y=c({y_values})\n")
+        output.write(
+            "plot("
+            f"x, y/{max(n_transcripts, 1)}, "
+            "xlab=\"percentile of gene body (5'->3')\", "
+            f"ylab='{ylab}', "
+            "type='s'"
+            ")\n"
         )
-
-    chrom = fields[0]
-    tx_start = int(fields[1])
-    tx_end = int(fields[2])
-    gene_name = fields[3]
-    strand = fields[5]
-
-    exon_starts = [
-        int(value)
-        for value in fields[11].rstrip(",\n").split(",")
-        if value
-    ]
-    exon_starts = [
-        exon_start + tx_start
-        for exon_start in exon_starts
-    ]
-
-    exon_sizes = [
-        int(value)
-        for value in fields[10].rstrip(",\n").split(",")
-        if value
-    ]
-    exon_ends = [
-        exon_start + exon_size
-        for exon_start, exon_size in zip(exon_starts, exon_sizes)
-    ]
-
-    return (
-        chrom,
-        tx_start,
-        tx_end,
-        gene_name,
-        strand,
-        exon_starts,
-        exon_ends,
-    )
+        output.write("dev.off()\n")
 
 
 def coverage_gene_body_bigwig(
@@ -158,117 +215,98 @@ def coverage_gene_body_bigwig(
     output_prefix: Path,
     *,
     graph_type: str = "png",
-) -> tuple[Path, Path, int]:
-    """Calculate gene-body coverage with the original sampling algorithm."""
-    coverage: defaultdict[int, float] = defaultdict(float)
-    gene_count = 0
+    min_mrna_length: int = 100,
+    length_bins: list[int] | str = "none",
+    transcript_norm: str = "none",
+    min_coverage: float = 0.0,
+) -> tuple[list[Path], Path, int]:
+    """Calculate gene-body coverage from a BigWig and write all outputs.
 
-    bigwig = pyBigWig.open(str(bigwig_file), "r")
-    if bigwig is None:
-        raise OSError(f"could not open BigWig file: {bigwig_file}")
+    Returns the data files written, the R script, and the number of
+    transcripts that contributed to the profile.
+    """
+    bed = genebody.parse_bed12(refbed, min_mrna_length)
+    print(
+        f"Total {bed.n_records} transcripts loaded; "
+        f"{len(bed.transcripts)} kept "
+        f"({bed.n_duplicate} duplicates, {bed.n_short} shorter than "
+        f"{min_mrna_length} bp, {bed.n_malformed} malformed lines)",
+        file=sys.stderr,
+    )
+    if not bed.transcripts:
+        raise ValueError("no usable transcripts in the BED file")
 
-    try:
-        chromosomes = set(bigwig.chroms())
+    lengths = [tx.length for tx in bed.transcripts]
+    length_edges = resolve_length_edges(length_bins, lengths)
+    labels = genebody.length_bin_labels(length_edges)
 
-        print("Calculating coverage over gene body ...", file=sys.stderr)
+    print("Calculating coverage over gene body ...", file=sys.stderr)
+    result = genebody.compute_bigwig_sample(
+        bigwig_file,
+        sample_name(bigwig_file),
+        bed.transcripts,
+        length_edges=length_edges,
+        transcript_norm=transcript_norm,
+        min_coverage=min_coverage,
+        progress=sys.stderr,
+    )
 
-        with refbed.open("r", encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                if line.startswith(("#", "track", "browser")):
-                    continue
+    print(
+        f"{result.overall.n} transcripts used, "
+        f"{result.n_low_coverage} below --min-coverage, "
+        f"{result.n_missing_chrom} on chromosomes absent from the BigWig, "
+        f"{result.n_out_of_range} extending past the chromosome end",
+        file=sys.stderr,
+    )
+    if result.overall.n == 0:
+        if result.n_missing_chrom == len(bed.transcripts):
+            raise ValueError(
+                "none of the BED chromosomes are in the BigWig; check "
+                "chromosome naming (e.g. 'chr1' vs '1')"
+            )
+        raise ValueError("no transcript passed the coverage filters")
 
-                try:
-                    (
-                        chrom,
-                        _tx_start,
-                        _tx_end,
-                        _gene_name,
-                        strand,
-                        exon_starts,
-                        exon_ends,
-                    ) = parse_bed12_line(
-                        line,
-                        path=refbed,
-                        line_number=line_number,
-                    )
-                except (ValueError, IndexError):
-                    print(
-                        "[NOTE: input BED must be 12-column] "
-                        f"skipped line {line_number}: {line.rstrip()}",
-                        file=sys.stderr,
-                    )
-                    continue
-
-                if chrom not in chromosomes:
-                    continue
-
-                gene_count += 1
-                gene_all_bases: list[int] = []
-                skip_gene = False
-
-                for start, end in zip(exon_starts, exon_ends):
-                    # Preserve the original 1-based genomic coordinates.
-                    gene_all_bases.extend(range(start + 1, end + 1))
-
-                    # Preserve the original early length check.
-                    if len(gene_all_bases) < 100:
-                        skip_gene = True
-                        break
-
-                if skip_gene:
-                    continue
-
-                gene_all_bases.sort(reverse=(strand == "-"))
-                percentile_bases = mystat.percentile_list(gene_all_bases)
-
-                for index, genomic_position in enumerate(percentile_bases):
-                    signal = bigwig.values(
-                        chrom,
-                        genomic_position - 1,
-                        genomic_position,
-                    )
-                    coverage[index] += float(np.nan_to_num(signal[0]))
-
-                print(
-                    f"\t{gene_count} genes finished\r",
-                    end=" ",
-                    file=sys.stderr,
-                )
-
-    finally:
-        bigwig.close()
-
-    print(file=sys.stderr)
+    profile = result.overall.result(transcript_norm)
 
     data_file = Path(f"{output_prefix}.geneBodyCoverage.txt")
+    metrics_file = Path(f"{output_prefix}.geneBodyCoverage.metrics.txt")
+    length_file = Path(f"{output_prefix}.geneBodyCoverage.byLength.txt")
     r_script = Path(f"{output_prefix}.geneBodyCoverage_plot.r")
 
-    y_coordinates: list[str] = []
+    write_coverage_table(data_file, profile)
+    written = [data_file]
 
-    with data_file.open("w", encoding="utf-8") as output:
-        output.write("percentile\tcount\n")
+    genebody.write_metrics(
+        metrics_file, [result], labels if length_edges else [], transcript_norm
+    )
+    written.append(metrics_file)
 
-        for index in coverage:
-            value = coverage[index]
-            y_coordinates.append(str(value))
-            output.write(f"{index}\t{value}\n")
-
-    with r_script.open("w", encoding="utf-8") as output:
-        plot_file = f"{output_prefix}.geneBodyCoverage.{graph_type}"
-        output.write(f"{graph_type}('{plot_file}')\n")
-        output.write("x=1:100\n")
-        output.write(f"y=c({','.join(y_coordinates)})\n")
-        output.write(
-            "plot("
-            f"x, y/{gene_count}, "
-            "xlab=\"percentile of gene body (5'->3')\", "
-            "ylab='average wigsum', "
-            "type='s'"
-            ")\n"
+    if length_edges:
+        genebody.write_length_profiles(
+            length_file, [result], labels, transcript_norm
         )
-        output.write("dev.off()\n")
+        written.append(length_file)
 
-    return data_file, r_script, gene_count
+    print(
+        f"\t3'/5' ratio: {genebody.fmt(genebody.ratio_3to5(profile))}\t"
+        f"Uniformity CV: {genebody.fmt(genebody.uniformity_cv(profile))}",
+        file=sys.stderr,
+    )
+
+    write_r_script(
+        r_script,
+        profile,
+        result.overall.n,
+        f"{output_prefix}.geneBodyCoverage.{graph_type}",
+        graph_type,
+        ylab=(
+            "average wigsum"
+            if transcript_norm == "none"
+            else "signal (relative to transcript mean)"
+        ),
+    )
+
+    return written, r_script, result.overall.n
 
 
 def run_r_script(
@@ -305,17 +343,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     validate_args(parser, args)
 
     try:
-        data_file, r_script, gene_count = coverage_gene_body_bigwig(
+        data_files, r_script, _n_used = coverage_gene_body_bigwig(
             bigwig_file=args.input_file,
             refbed=args.ref_gene_model,
             output_prefix=args.output_prefix,
             graph_type=args.graph_type,
+            min_mrna_length=args.min_mrna_length,
+            length_bins=args.length_edges,
+            transcript_norm=args.transcript_norm,
+            min_coverage=args.min_coverage,
         )
-
-        if gene_count == 0:
-            raise ValueError(
-                "no valid BED12 records matched chromosomes in the BigWig"
-            )
 
         if not args.skip_plot:
             run_r_script(
@@ -324,7 +361,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 executable=args.rscript,
             )
 
-        print(f"Created: {data_file}", file=sys.stderr)
+        for data_file in data_files:
+            print(f"Created: {data_file}", file=sys.stderr)
         print(f"Created: {r_script}", file=sys.stderr)
 
     except (OSError, ValueError, RuntimeError, ZeroDivisionError) as exc:

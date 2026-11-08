@@ -81,13 +81,7 @@ def make_unique_sample_name(name: str, seen: list[str]) -> str:
     return name if count == 0 else f"{name}.{count}"
 
 
-def fmt(value: float) -> str:
-    if math.isnan(value):
-        return "NA"
-    if math.isinf(value):
-        return "Inf" if value > 0 else "-Inf"
-    return f"{value:.6g}"
-
+fmt = genebody.fmt
 
 # --------------------------------------------------------------------------
 # Command line
@@ -284,61 +278,8 @@ def write_profiles(
             )
 
 
-def write_length_profiles(
-    path: Path,
-    results: Sequence[genebody.SampleResult],
-    labels: Sequence[str],
-    transcript_norm: str,
-) -> None:
-    with path.open("w", encoding="utf-8") as output:
-        print(
-            "Sample\tLengthBin\tnTranscripts\t"
-            + "\t".join(str(i) for i in range(1, 101)),
-            file=output,
-        )
-        for result in results:
-            for label, profile_sum in zip(labels, result.by_length):
-                profile = profile_sum.result(transcript_norm)
-                values = (
-                    "\t".join(fmt(v) for v in profile)
-                    if profile_sum.n
-                    else "\t".join(["NA"] * 100)
-                )
-                print(
-                    f"{result.name}\t{label}\t{profile_sum.n}\t{values}",
-                    file=output,
-                )
-
-
-def write_metrics(
-    path: Path,
-    results: Sequence[genebody.SampleResult],
-    labels: Sequence[str],
-    transcript_norm: str,
-) -> None:
-    with path.open("w", encoding="utf-8") as output:
-        print(
-            "Sample\tLengthBin\tnTranscripts\tRatio3to5\tUniformityCV\t"
-            "Skewness_deprecated",
-            file=output,
-        )
-        for result in results:
-            groups = [("all", result.overall)] + list(
-                zip(labels, result.by_length)
-            )
-            for label, profile_sum in groups:
-                if profile_sum.n:
-                    profile = profile_sum.result(transcript_norm)
-                    ratio = genebody.ratio_3to5(profile)
-                    cv = genebody.uniformity_cv(profile)
-                    skew = genebody.pearson_moment_coefficient(profile)
-                else:
-                    ratio = cv = skew = math.nan
-                print(
-                    f"{result.name}\t{label}\t{profile_sum.n}\t"
-                    f"{fmt(ratio)}\t{fmt(cv)}\t{fmt(skew)}",
-                    file=output,
-                )
+write_length_profiles = genebody.write_length_profiles
+write_metrics = genebody.write_metrics
 
 
 def relative_profile(profile: np.ndarray) -> np.ndarray | None:
