@@ -1,7 +1,8 @@
 From 7a47bc8e6f9fa160a03383e69b8bda6386c93ca1 Mon Sep 17 00:00:00 2001
 From: LBZhao <zhaolinbo@gmail.com>
 Date: Sun, 8 Nov 2026 06:15:57 +0000
-Subject: [PATCH] RSeQC: parse novel-combination junctions and non-coding exons
+Subject: [PATCH 1/2] RSeQC: parse novel-combination junctions and non-coding
+ exons
 
 The LBZhao fork of RSeQC (5.1.0+lbzhao, https://github.com/LBZhao/RSeQC)
 adds two report categories. junction_annotation.py reports junctions

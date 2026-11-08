@@ -21,15 +21,26 @@ Tested against MultiQC `main` at `a286ece`:
 - `multiqc --strict` on RSeQC 5.0.6 output: report unchanged.
 - `ruff check` / `ruff format`: no new findings.
 
-## Using or submitting the patch
+## The LBZhao/MultiQC fork
 
-The official RSeQC does not write these lines; only this fork does. So:
+The two patches here make up the fork at https://github.com/LBZhao/MultiQC
+(official MultiQC `main` at `a286ece` plus these commits):
 
-- **To use it now**, apply the patch to your own MultiQC install:
-  `git clone https://github.com/MultiQC/MultiQC && cd MultiQC &&
-  git am <path>/0001-rseqc-novel-combination-noncoding.patch && pip install .`
-- **To offer it to MultiQC**, fork https://github.com/MultiQC/MultiQC,
-  `git am` the patch on a branch from `main`, and open a pull request that
-  says the output comes from the LBZhao fork of RSeQC. MultiQC may decline
-  support for a fork. Example output for https://github.com/MultiQC/test-data
-  helps review.
+1. `0001-rseqc-novel-combination-noncoding.patch`: the RSeQC module change.
+2. `0002-identify-lbzhao-fork.patch`: marks the fork as not official
+   (version `1.36.dev0+lbzhao`, shown in every report; README notice).
+
+To recreate it, fork https://github.com/MultiQC/MultiQC on GitHub, then:
+
+```bash
+git clone https://github.com/LBZhao/MultiQC && cd MultiQC
+git checkout a286ece -b lbzhao-main
+git am <path>/0001-rseqc-novel-combination-noncoding.patch <path>/0002-identify-lbzhao-fork.patch
+git push --force origin lbzhao-main:main
+```
+
+Install it with `pip install git+https://github.com/LBZhao/MultiQC.git`.
+
+To offer only the RSeQC change to the official MultiQC, open a pull request
+with patch 0001 alone and say the output comes from the LBZhao fork of
+RSeQC; MultiQC may decline support for a fork.
