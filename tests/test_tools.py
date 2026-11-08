@@ -288,3 +288,167 @@ def test_inner_distance_on_mrna(tmp_path, bam_builder):
         ["95", "sameTranscript=Yes,sameExon=Yes,dist=mRNA"],   # read end includes the deletion
     ])
     assert "> 100: 0" in result.stderr
+
+
+# --------------------------------------------------------------------------
+# tin
+# --------------------------------------------------------------------------
+
+
+def tin_scores(tmp_path, bam, bed, *args):
+    out_dir = tmp_path / "tin_out"
+    out_dir.mkdir(exist_ok=True)
+    run_script("tin.py", "-i", bam, "-r", bed, "-o", out_dir, *args)
+    rows = table(next(out_dir.glob("*.tin.xls")))
+    return {row[0]: row[4] for row in rows[1:]}
+
+
+def expected_tin(depths):
+    import math
+    total = sum(depths)
+    entropy = -sum(d / total * math.log(d / total) for d in depths if d)
+    return 100 * math.exp(entropy) / len(depths)
+
+
+def test_tin_no_depth_cap_na_and_mapq(tmp_path, bam_builder):
+    bed = write_bed(tmp_path, [
+        bed12_line("deep", "+", [(1000, 1200)]),
+        bed12_line("flat", "+", [(5000, 5100)]),
+        bed12_line("empty", "+", [(9000, 9100)]),
+    ])
+    builder = bam_builder()
+    # "deep": 9,000 reads on the first half, 4,500 on the second. pysam's
+    # default pileup stopped at 8,000 reads per base.
+    for _ in range(9000):
+        builder.add(1000, "100M")
+    for _ in range(4500):
+        builder.add(1100, "100M")
+    # "flat": even coverage.
+    for _ in range(20):
+        builder.add(5000, "100M")
+    # Low-MAPQ reads would make "empty" pass the read check if counted.
+    for start in range(9000, 9050):
+        builder.add(start, "50M", mapq=0)
+    bam = builder.write()
+
+    scores = tin_scores(tmp_path, bam, bed, "-c", "0", "-n", "1000")
+    assert float(scores["deep"]) == pytest.approx(expected_tin([9000] * 100 + [4500] * 100), rel=1e-6)
+    # Every base of a 100 bp transcript sampled once: perfectly even = 100.
+    assert float(scores["flat"]) == pytest.approx(100.0)
+    assert scores["empty"] == "NA"
+
+
+# --------------------------------------------------------------------------
+# bam2wig
+# --------------------------------------------------------------------------
+
+
+def read_wig(path):
+    values = {}
+    for line in Path(path).read_text().splitlines():
+        if line.startswith("variableStep"):
+            continue
+        pos, value = line.split("\t")
+        values[int(pos)] = float(value)
+    return values
+
+
+def test_bamtowig_coverage_windows_and_normalization(tmp_path, bam_builder):
+    builder = bam_builder()
+    builder.add(995, "5S10M")             # crosses a window boundary at 1000
+    builder.add(1003, "2M100N3M")
+    builder.add(1003, "5M", mapq=0)       # skipped with skip_multi
+    bam = builder.write()
+    sizes = {CHROM: 200_000}
+    chrom_file = tmp_path / "chrom.sizes"
+    chrom_file.write_text(f"{CHROM}\t200000\n")
+
+    alignment = SAM.ParseBAM(str(bam))
+    total = alignment.calWigSum(sizes, skip_multi=True, q_cut=30)
+    assert total == 15                     # 10 + 2 + 3 aligned bases
+
+    prefix = str(tmp_path / "w")
+    SAM.ParseBAM(str(bam)).bamTowig(prefix, sizes, str(chrom_file), skip_multi=True,
+                                   q_cut=30, WigSumFactor=2.0, window=1000)
+    wig = read_wig(prefix + ".wig")
+    # 1-based wig positions; the soft clip does not shift the read.
+    expected = {p: 2.0 for p in range(996, 1006)}
+    expected.update({1004: 4.0, 1005: 4.0, 1106: 2.0, 1107: 2.0, 1108: 2.0})
+    assert wig == expected
+
+
+def test_bamtowig_strand_rule(tmp_path, bam_builder):
+    builder = bam_builder()
+    builder.add_pair(1000, "10M", 1100, "10M")   # read1 +, read2 -
+    builder.add(2000, "10M")                     # unpaired: not covered by the rule
+    bam = builder.write()
+    prefix = str(tmp_path / "s")
+    chrom_file = tmp_path / "chrom.sizes"
+    chrom_file.write_text(f"{CHROM}\t200000\n")
+    SAM.ParseBAM(str(bam)).bamTowig(prefix, {CHROM: 200_000}, str(chrom_file),
+                                   strand_rule="1+-,1-+,2++,2--", skip_multi=False)
+    # Rule 1+- : read 1 on '+' comes from a '-' gene; read 2 on '-' too.
+    assert read_wig(prefix + ".Forward.wig") == {}
+    reverse = read_wig(prefix + ".Reverse.wig")
+    assert set(reverse) == set(range(1001, 1011)) | set(range(1101, 1111))
+    assert set(reverse.values()) == {-1.0}
+
+
+# --------------------------------------------------------------------------
+# FPKM_count
+# --------------------------------------------------------------------------
+
+
+def fpkm_counts(tmp_path, bam, bed, *args):
+    prefix = tmp_path / "fpkm"
+    run_script("FPKM_count.py", "-i", bam, "-r", bed, "-o", prefix, *args)
+    rows = [r for r in table(f"{prefix}.FPKM.xls") if not r[0].startswith("#")]
+    return {row[3]: float(row[6]) for row in rows}
+
+
+def test_fpkm_count_spliced_reads_and_pairs_at_transcript_edge(tmp_path, bam_builder):
+    bed = write_bed(tmp_path, [bed12_line("g", "+", GENE)])
+    builder = bam_builder()
+    builder.add_pair(1100, "50M", 1200, "50M")      # inside the transcript
+    # Read 1 starts upstream of the transcript and is not fetched for it;
+    # read 2 starts in exon 1.
+    builder.add_pair(900, "50M", 1100, "50M")
+    # Single-end read spliced from upstream into exon 1: pos + read length
+    # ends before the exon, the aligned blocks do not.
+    builder.add(500, "10M600N40M")
+    builder.add(1200, "50M", flag=0x800)            # supplementary: not counted
+    bam = builder.write()
+    assert fpkm_counts(tmp_path, bam, bed)["g"] == 3
+
+
+def test_fpkm_count_stranded_pair_counted_through_read2(tmp_path, bam_builder):
+    bed = write_bed(tmp_path, [bed12_line("g", "+", GENE)])
+    builder = bam_builder()
+    builder.add_pair(900, "50M", 1100, "50M")       # read 1 '+', read 2 '-'
+    builder.add_pair(1100, "50M", 1200, "50M")      # fully exonic pair
+    bam = builder.write()
+    prefix = tmp_path / "s"
+    run_script("FPKM_count.py", "-i", bam, "-r", bed, "-o", prefix, "-d", "1++,1--,2+-,2-+")
+    header = [r for r in table(f"{prefix}.FPKM.xls") if r[0].startswith("#")][-1]
+    row = [r for r in table(f"{prefix}.FPKM.xls") if not r[0].startswith("#")][0]
+    values = dict(zip(header, row))
+    assert float(values["Frag_count"]) == 2
+
+
+# --------------------------------------------------------------------------
+# read_duplication
+# --------------------------------------------------------------------------
+
+
+def test_positional_duplication_uses_mate_position(tmp_path, bam_builder):
+    builder = bam_builder()
+    builder.add_pair(1000, "50M", 1200, "50M")
+    builder.add_pair(1000, "50M", 1300, "50M")     # same read-1 position, other mate
+    builder.add_pair(2000, "50M", 2200, "50M")
+    builder.add_pair(2000, "50M", 2200, "50M")     # true duplicate pair
+    bam = builder.write()
+    prefix = tmp_path / "dup"
+    run_script("read_duplication.py", "-i", bam, "-o", prefix, "--skip-plot")
+    occurrence = {int(r[0]): int(r[1]) for r in table(f"{prefix}.pos.DupRate.xls")[1:]}
+    # Reads seen once: both 1000-pairs (4 reads); seen twice: the 2000 pairs.
+    assert occurrence == {1: 4, 2: 2}

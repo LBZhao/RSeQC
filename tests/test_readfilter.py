@@ -89,3 +89,25 @@ def test_bam2fq_writes_each_read_once(chimeric_bam, tmp_path):
     lines = (tmp_path / "reads.fastq").read_text().splitlines()
     names = [line[1:] for line in lines[0::4]]
     assert sorted(names) == ["chimera", "plain"]
+
+
+@pytest.mark.parametrize("rule, expected", [
+    (None, {}),
+    ("1++,1--,2+-,2-+", {"1+": "+", "1-": "-", "2+": "-", "2-": "+"}),
+    ("+-,-+", {"+": "-", "-": "+"}),
+])
+def test_parse_strand_rule(rule, expected):
+    assert readfilter.parse_strand_rule(rule) == expected
+
+
+@pytest.mark.parametrize("rule", ["1++,1--", "++,--,+-", "1+x,1--,2+-,2-+", "abc"])
+def test_parse_strand_rule_rejects_bad_rules(rule):
+    with pytest.raises(ValueError):
+        readfilter.parse_strand_rule(rule)
+
+
+def test_gene_strand_for_unpaired_read_under_paired_rule():
+    rule = readfilter.parse_strand_rule("1++,1--,2+-,2-+")
+    assert readfilter.gene_strand(make_read(flag=0x1 | 0x40), rule) == "+"
+    assert readfilter.gene_strand(make_read(flag=0x1 | 0x80 | 0x10), rule) == "+"
+    assert readfilter.gene_strand(make_read(), rule) is None

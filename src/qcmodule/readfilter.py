@@ -49,3 +49,49 @@ def passes(read, *, min_mapq: int = 0, exclude: int = DEFAULT_EXCLUDE) -> bool:
 def is_non_primary(read) -> bool:
     """True for secondary or supplementary records."""
     return bool(read.flag & NON_PRIMARY)
+
+
+# --------------------------------------------------------------------------
+# Strand rules (from infer_experiment.py)
+# --------------------------------------------------------------------------
+
+
+def parse_strand_rule(rule: str | None) -> dict[str, str]:
+    """Parse a strand rule such as ``"1++,1--,2+-,2-+"`` or ``"++,--"``.
+
+    Returns a map from read key (``"1+"``, ``"2-"`` for paired data, ``"+"``
+    / ``"-"`` for single-end data) to the strand of the gene the read comes
+    from. ``None`` or an empty string means the library is not stranded and
+    gives an empty map.
+    """
+    if not rule:
+        return {}
+    items = [item.strip() for item in rule.split(",") if item.strip()]
+    mapping: dict[str, str] = {}
+    if len(items) == 4 and all(len(i) == 3 and i[0] in "12" for i in items):
+        for item in items:
+            mapping[item[:2]] = item[2]
+    elif len(items) == 2 and all(len(i) == 2 for i in items):
+        for item in items:
+            mapping[item[0]] = item[1]
+    else:
+        raise ValueError(f"unknown strand rule: {rule!r}")
+    if not set(mapping.values()) <= {"+", "-"} or not all(
+        key[-1] in "+-" for key in mapping
+    ):
+        raise ValueError(f"unknown strand rule: {rule!r}")
+    return mapping
+
+
+def read_key(read) -> str:
+    """Strand-rule key of a read: ``"1+"``, ``"2-"``, ... or ``"+"``/``"-"``."""
+    strand = "-" if read.is_reverse else "+"
+    if read.is_paired:
+        return ("1" if read.is_read1 else "2") + strand
+    return strand
+
+
+def gene_strand(read, rule: dict[str, str]) -> str | None:
+    """Gene strand implied by *rule* for *read*, or None if it does not apply
+    (e.g. an unpaired read under a paired-end rule)."""
+    return rule.get(read_key(read))

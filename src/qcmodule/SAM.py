@@ -312,144 +312,117 @@ class ParseBAM(object):
             return ["SingleEnd", spec1, spec2, 1 - spec1 - spec2]
         return ["Mixture", 0, 0, 0]
 
-    def bamTowig(self,outfile,chrom_sizes, chrom_file,skip_multi=True,strand_rule=None,WigSumFactor=None,q_cut=30):
-        """Convert BAM/SAM file to wig file. chrom_size is dict with chrom as key and chrom_size as value
-        strandRule should be determined from \"infer_experiment\". such as \"1++,1--,2+-,2-+\". When
-        WigSumFactor is provided, output wig file will be normalized to this number """
-        
-        #strand_rule={'1+':'-','1-':'+','2+':'+','2-':'-'}
-        strandRule={}
-        if strand_rule is None:                                                 # Not strand-specific
-            pass                                                                
-        elif len(strand_rule.split(',')) ==4:                                   #PairEnd, strand-specific
-            for i in strand_rule.split(','):strandRule[i[0]+i[1]]=i[2]
-        elif len(strand_rule.split(',')) ==2:                                   #singeEnd, strand-specific
-            for i in strand_rule.split(','):strandRule[i[0]]=i[1]
-        else:
-            print("Unknown value of option :'strand_rule' " + strand_rule, file=sys.stderr)
-            sys.exit(1)
-        if len(strandRule) == 0:
-            FWO = open(outfile + '.wig','w')
-        else:
-            FWO = open(outfile + '.Forward.wig','w')
-            RVO = open(outfile + '.Reverse.wig','w')
-        
-        read_id=''
-        
-        for chr_name, chr_size in list(chrom_sizes.items()):        #iterate each chrom
-            try:
-                self.samfile.fetch(chr_name,0,chr_size)
-            except:
-                print("No alignments for " + chr_name + '. skipped', file=sys.stderr)
-                continue
-            print("Processing " + chr_name + " ...", file=sys.stderr)
-            if len(strandRule) == 0: FWO.write('variableStep chrom='+chr_name+'\n')
-            else:
-                FWO.write('variableStep chrom='+chr_name+'\n')
-                RVO.write('variableStep chrom='+chr_name+'\n')
-            Fwig = collections.defaultdict(int)
-            Rwig = collections.defaultdict(int)
-            alignedReads = self.samfile.fetch(chr_name,0,chr_size)      
-            for aligned_read in alignedReads:
-                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
-                
-                if skip_multi:
-                    if aligned_read.mapq < q_cut:
-                        continue                
-                if aligned_read.is_paired:
-                    if aligned_read.is_read1:read_id = '1'
-                    if aligned_read.is_read2:read_id = '2'
-                
-                if aligned_read.is_reverse:map_strand = '-'
-                else:map_strand = '+'
-                
-                key = read_id + map_strand
-                
-                hit_st = aligned_read.pos
-                for block in bam_cigar.fetch_exon(chr_name, hit_st, aligned_read.cigar): 
-                    for pos in range(block[1]+1,block[2]+1):    
-                        if len(strandRule) == 0: Fwig[pos] +=1.0    #this is NOT strand specific. everything into Fwig
-                        else:                                       #this is strand specific. separate Fwig and Rwig
-                            if strandRule[key] == '+':Fwig[pos] +=1.0
-                            if strandRule[key] == '-':Rwig[pos] -=1.0
-            if WigSumFactor is None:    #not normalize  
-                if len(strandRule) == 0:                            #this is NOT strand specific.
-                    for pos in sorted (Fwig.keys()):
-                        print("%d\t%.2f" % (pos,Fwig[pos]), file=FWO)
-                else:
-                    for pos in sorted (Fwig.keys()):
-                        print("%d\t%.2f" % (pos,Fwig[pos]), file=FWO)
-                    for pos in sorted (Rwig.keys()):
-                        print("%d\t%.2f" % (pos,Rwig[pos]), file=RVO)
-            else:                       #normalize wig signal to WigSumFactor
-                if len(strandRule) == 0:                            #this is NOT strand specific.
-                    for pos in sorted (Fwig.keys()):
-                        print("%d\t%.2f" % (pos,Fwig[pos]*WigSumFactor), file=FWO)
-                else:
-                    for pos in sorted (Fwig.keys()):
-                        print("%d\t%.2f" % (pos,Fwig[pos]*WigSumFactor), file=FWO)
-                    for pos in sorted (Rwig.keys()):
-                        print("%d\t%.2f" % (pos,Rwig[pos]*WigSumFactor), file=RVO)
-        FWO.close()
-        if len(strandRule) != 0:
-            RVO.close()
-        if len(strandRule) == 0:
-            try:
-                import subprocess
-                print("Run " + "wigToBigWig " + outfile + '.wig ' + chrom_file + ' ' +  outfile + ".bw ")
-                subprocess.call("wigToBigWig -clip " + outfile + '.wig ' + chrom_file + ' ' +  outfile + ".bw ",shell=True)
-            except:
-                print("Failed to call \"wigToBigWig\".", file=sys.stderr)
-                pass
-        else:
-            try:
-                import subprocess
-                subprocess.call("wigToBigWig -clip " + outfile + '.Forward.wig ' + chrom_file + ' ' +  outfile + ".Forward.bw ",shell=True)
-                subprocess.call("wigToBigWig -clip " + outfile + '.Reverse.wig ' + chrom_file + ' ' +  outfile + ".Reverse.bw ",shell=True)
-            except:
-                print("Failed to call \"wigToBigWig\".", file=sys.stderr)
-                pass            
+    def bamTowig(self,outfile,chrom_sizes, chrom_file,skip_multi=True,strand_rule=None,WigSumFactor=None,q_cut=30, window=10_000_000):
+        """Write per-base read coverage as wiggle (variableStep) and BigWig.
 
-    def calWigSum(self,chrom_sizes, skip_multi=True):
-        """Calculate wigsum from BAM file"""
-        
+        Each aligned base of each read adds 1 (soft clips, deletions and
+        introns add nothing). With *strand_rule* (from infer_experiment, e.g.
+        ``"1++,1--,2+-,2-+"``) coverage is split into ``.Forward.wig`` and
+        ``.Reverse.wig`` (reverse values are negative); reads the rule does
+        not cover (e.g. unpaired reads under a paired-end rule) are skipped
+        and counted. With *WigSumFactor* every value is multiplied by it.
+        Reads below *q_cut* are skipped when *skip_multi* is True, using the
+        same rule as :meth:`calWigSum`.
+        """
+        import shutil
+        import subprocess
+        import numpy as np
+
+        rule = readfilter.parse_strand_rule(strand_rule)
+        min_mapq = q_cut if skip_multi else 0
+        factor = 1.0 if WigSumFactor is None else float(WigSumFactor)
+        if rule:
+            paths = {'+': outfile + '.Forward.wig', '-': outfile + '.Reverse.wig'}
+        else:
+            paths = {None: outfile + '.wig'}
+        handles = {key: open(path, 'w') for key, path in paths.items()}
+        references = set(self.samfile.references)
+        n_unassigned = 0
+
+        try:
+            for chr_name, chr_size in chrom_sizes.items():
+                if chr_name not in references:
+                    print("No alignments for " + chr_name + '. skipped', file=sys.stderr)
+                    continue
+                print("Processing " + chr_name + " ...", file=sys.stderr)
+                for handle in handles.values():
+                    handle.write('variableStep chrom=' + chr_name + '\n')
+
+                for win_st in range(0, chr_size, window):
+                    win_end = min(chr_size, win_st + window)
+                    span = win_end - win_st
+                    starts = {key: [] for key in handles}
+                    ends = {key: [] for key in handles}
+                    for aligned_read in self.samfile.fetch(chr_name, win_st, win_end):
+                        if not readfilter.passes(aligned_read, min_mapq=min_mapq):
+                            continue
+                        if rule:
+                            key = readfilter.gene_strand(aligned_read, rule)
+                            if key is None:
+                                if aligned_read.reference_start >= win_st:
+                                    n_unassigned += 1
+                                continue
+                        else:
+                            key = None
+                        for block_st, block_end in aligned_read.get_blocks():
+                            block_st = max(block_st, win_st)
+                            block_end = min(block_end, win_end)
+                            if block_st < block_end:
+                                starts[key].append(block_st - win_st)
+                                ends[key].append(block_end - win_st)
+                    for key, handle in handles.items():
+                        if not starts[key]:
+                            continue
+                        diff = np.bincount(starts[key], minlength=span + 1)[: span + 1]
+                        diff -= np.bincount(ends[key], minlength=span + 1)[: span + 1]
+                        coverage = np.cumsum(diff[:span])
+                        positions = np.flatnonzero(coverage)
+                        values = coverage[positions] * (-factor if key == '-' else factor)
+                        np.savetxt(
+                            handle,
+                            np.column_stack((positions + win_st + 1, values)),
+                            fmt=('%d', '%.2f'),
+                            delimiter='\t',
+                        )
+        finally:
+            for handle in handles.values():
+                handle.close()
+
+        if n_unassigned:
+            print(f"Warning: {n_unassigned} reads not covered by strand rule {strand_rule!r} were skipped.", file=sys.stderr)
+
+        executable = shutil.which("wigToBigWig")
+        if executable is None:
+            print("wigToBigWig was not found; only wiggle files were written.", file=sys.stderr)
+            return
+        for path in paths.values():
+            bigwig = path[: -len('.wig')] + '.bw'
+            print("Run wigToBigWig " + path + ' ' + chrom_file + ' ' + bigwig, file=sys.stderr)
+            result = subprocess.run([executable, "-clip", path, chrom_file, bigwig])
+            if result.returncode != 0:
+                print('Failed to run "wigToBigWig" for ' + path, file=sys.stderr)
+
+    def calWigSum(self,chrom_sizes, skip_multi=True, q_cut=30):
+        """Total aligned bases, using the same read filter as :meth:`bamTowig`.
+
+        (Before RSeQC 5.1.0 multi-mapped reads were identified here by the NH
+        tag but in :meth:`bamTowig` by MAPQ, so the normalization total and
+        the signal could count different reads.)
+        """
         print("Calcualte wigsum ... ", file=sys.stderr)
+        min_mapq = q_cut if skip_multi else 0
+        references = set(self.samfile.references)
         wigsum = 0.0
-        #read_id=''
-        for chr_name, chr_size in list(chrom_sizes.items()):        #iterate each chrom
-            try:
-                self.samfile.fetch(chr_name,0,chr_size)
-            except:
+        for chr_name in chrom_sizes:
+            if chr_name not in references:
                 print("No alignments for " + chr_name + '. skipped', file=sys.stderr)
                 continue
             print("Processing " + chr_name + " ...", file=sys.stderr)
-
-            alignedReads = self.samfile.fetch(chr_name,0,chr_size)      
-            for aligned_read in alignedReads:
-                flag=0
-                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
-                
-                if skip_multi:
-                    if len(aligned_read.tags)>0:        #( ("NM", 1),("RG", "L1") )
-                        for i in aligned_read.tags:
-                            if i[0] in ParseBAM.multi_hit_tags and i[1] >1:
-                                flag=1                      #multiple hit read
-                                break
-                    if flag==1:continue                     #skip multiple map read     
-                
-                #if aligned_read.is_paired:
-                    #if aligned_read.is_read1:read_id = '1'
-                    #if aligned_read.is_read2:read_id = '2'
-                
-                #if aligned_read.is_reverse:map_strand = '-'
-                #else:map_strand = '+'
-                
-                #key = read_id + map_strand
-                
-                hit_st = aligned_read.pos
-                for block in bam_cigar.fetch_exon(chr_name, hit_st, aligned_read.cigar): 
-                    wigsum += (block[2] - block[1])
-        return wigsum   
+            for aligned_read in self.samfile.fetch(chr_name):
+                if not readfilter.passes(aligned_read, min_mapq=min_mapq):
+                    continue
+                wigsum += sum(end - st for st, end in aligned_read.get_blocks())
+        return wigsum
 
     def bam2fq(self, prefix: str, paired: bool = True) -> None:
         """Convert BAM/SAM alignments into FASTQ files."""
@@ -761,7 +734,14 @@ class ParseBAM(object):
         #self.f.seek(0)
 
     def readDupRate(self,q_cut, outfile=None,up_bound=500):
-        '''Calculate reads's duplicate rates'''
+        '''Calculate read duplication rates by sequence and by mapping position.
+
+        Duplicate-flagged reads are counted (that is what is measured);
+        secondary and supplementary records are not. For paired reads the
+        mapping key includes the mate position. In RNA-seq, highly expressed
+        genes produce many reads at the same position without PCR, so a high
+        rate does not by itself indicate PCR duplication.
+        '''
         if outfile is None:
             outfile1 = self.fileName + ".seq.DupRate.xls"
             outfile2 = self.fileName + ".pos.DupRate.xls"
@@ -800,6 +780,9 @@ class ParseBAM(object):
                 for ex in exon_blocks:
                     exon_boundary += str(ex[1]) + '-' + str(ex[2]) + ":"
                 key = chrom + ":" + str(hit_st) + ":" + exon_boundary
+                if aligned_read.is_paired and not aligned_read.mate_is_unmapped:
+                    # A pair is a positional duplicate only if both ends match.
+                    key += "mate=" + str(aligned_read.next_reference_id) + ":" + str(aligned_read.next_reference_start)
                 posDup[key] +=1
 
         except StopIteration:
@@ -1591,17 +1574,7 @@ class ParseBAM(object):
         block_list_plus = []    #non-spliced read AS IS, splicing reads were counted multiple times
         block_list_minus = []
         block_list = []
-        strandRule = {}
-                
-        if strand_rule is None:                                                 # Not strand-specific
-            pass                                                                
-        elif len(strand_rule.split(',')) ==4:                                   #PairEnd, strand-specific
-            for i in strand_rule.split(','):strandRule[i[0]+i[1]]=i[2]
-        elif len(strand_rule.split(',')) ==2:                                   #singeEnd, strand-specific
-            for i in strand_rule.split(','):strandRule[i[0]]=i[1]
-        else:
-            print("Unknown value of: 'strand_rule' " +  strand_rule, file=sys.stderr)
-            sys.exit(1) 
+        strandRule = readfilter.parse_strand_rule(strand_rule)
 
 
         #read SAM or BAM
@@ -1636,11 +1609,12 @@ class ParseBAM(object):
                 
                 #strand specific
                 if strand_rule is not None:
-                    if strandRule[strand_key] == '+': cUR_plus += len(exon_blocks)
-                    if strandRule[strand_key] == '-': cUR_minus += len(exon_blocks)
+                    gene_strand = strandRule.get(strand_key)     # None: read not covered by the rule
+                    if gene_strand == '+': cUR_plus += len(exon_blocks)
+                    if gene_strand == '-': cUR_minus += len(exon_blocks)
                     for exn in exon_blocks:
-                        if strandRule[strand_key] == '+': block_list_plus.append(exn[0] + ":" + str(exn[1] + int((exn[2]-exn[1])/2) ))
-                        if strandRule[strand_key] == '-': block_list_minus.append(exn[0] + ":" + str(exn[1] + int((exn[2]-exn[1])/2) ))
+                        if gene_strand == '+': block_list_plus.append(exn[0] + ":" + str(exn[1] + int((exn[2]-exn[1])/2) ))
+                        if gene_strand == '-': block_list_minus.append(exn[0] + ":" + str(exn[1] + int((exn[2]-exn[1])/2) ))
                 #Not strand specific
                 else:           
                     for exn in exon_blocks:

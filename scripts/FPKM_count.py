@@ -11,6 +11,7 @@ The counting rules intentionally match the original RSeQC implementation.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -139,29 +140,8 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
 
 
 def parse_strand_rule(strand_rule: str | None) -> dict[str, str]:
-    """Parse the legacy RSeQC strand-rule syntax."""
-    strand_map: dict[str, str] = {}
-
-    if strand_rule is None:
-        return strand_map
-
-    tokens = strand_rule.split(",")
-
-    if len(tokens) == 4:
-        for token in tokens:
-            if len(token) < 3:
-                raise ValueError(f"invalid paired-end strand token: {token!r}")
-            strand_map[token[0] + token[1]] = token[2]
-        return strand_map
-
-    if len(tokens) == 2:
-        for token in tokens:
-            if len(token) < 2:
-                raise ValueError(f"invalid single-end strand token: {token!r}")
-            strand_map[token[0]] = token[1]
-        return strand_map
-
-    raise ValueError(f"unknown strand rule: {strand_rule}")
+    """Parse the RSeQC strand-rule syntax (see qcmodule.readfilter)."""
+    return readfilter.parse_strand_rule(strand_rule)
 
 
 def build_exon_ranges(refgene_bed: Path) -> dict[str, Intersecter]:
@@ -262,8 +242,13 @@ def count_total_fragments(
         except (ValueError, IndexError):
             continue
 
-        read_st = aligned_read.pos
-        read_end = read_st + aligned_read.rlen
+        read_st = aligned_read.reference_start
+        # Reference end includes introns, so spliced reads reach their exons.
+        read_end = (
+            aligned_read.reference_end
+            if aligned_read.reference_end is not None
+            else read_st + (aligned_read.query_length or 1)
+        )
 
         if not aligned_read.is_paired:
             total_frags += 1
@@ -364,6 +349,29 @@ def parse_transcript_line(line: str) -> tuple[
     )
 
 
+def mate_reference_end(aligned_read) -> int:
+    """Reference end of the mate: from its CIGAR (MC tag) when present,
+    otherwise estimated from this read's length."""
+    if aligned_read.has_tag("MC"):
+        cigar = bam_cigar_tuples(aligned_read.get_tag("MC"))
+        return aligned_read.next_reference_start + sum(
+            size for op, size in cigar if op in (0, 2, 3, 7, 8)
+        )
+    return aligned_read.next_reference_start + (aligned_read.query_length or 1)
+
+
+def bam_cigar_tuples(cigar: str) -> list[tuple[int, int]]:
+    codes = {"M": 0, "I": 1, "D": 2, "N": 3, "S": 4, "H": 5, "P": 6, "=": 7, "X": 8}
+    return [(codes[op], int(size)) for size, op in re.findall(r"(\d+)([MIDNSHP=X])", cigar)]
+
+
+def overlaps_exons(aligned_read, exon_ranges: Intersecter) -> bool:
+    """True if any aligned block of the read overlaps an exon."""
+    return any(
+        exon_ranges.find(start, end) for start, end in aligned_read.get_blocks()
+    )
+
+
 def count_transcript(
     samfile,
     *,
@@ -377,15 +385,20 @@ def count_transcript(
     map_qual: int,
     single_read: float,
 ) -> tuple[float, float, float]:
-    """Count one transcript using the original counting method exactly."""
-    frag_count_f = 0.0
-    frag_count_r = 0.0
-    frag_count_fr = 0.0
+    """Count fragments of one transcript: (forward, reverse, unstranded).
+
+    Single-end reads count if an aligned block overlaps an exon. A pair
+    counts if either mate starts in an exon, and is counted once: through
+    read 1, or through read 2 when read 1 lies outside the transcript and
+    is not fetched. A pair with one unmapped mate counts *single_read*.
+    Fragments overlapping several transcripts count for each of them.
+    """
+    counts = {"+": 0.0, "-": 0.0, None: 0.0}
 
     try:
         aligned_reads = samfile.fetch(chrom, tx_start, tx_end)
     except (ValueError, OSError):
-        return frag_count_f, frag_count_r, frag_count_fr
+        return 0.0, 0.0, 0.0
 
     for aligned_read in aligned_reads:
         if not alignment_passes_legacy_filters(
@@ -395,66 +408,56 @@ def count_transcript(
         ):
             continue
 
+        if strand_rule is None:
+            bucket = None
+        else:
+            bucket = strand_map.get(readfilter.read_key(aligned_read))
+            if bucket is None:
+                continue
+
         if not aligned_read.is_paired:
-            frag_st = aligned_read.pos
-            frag_end = frag_st + aligned_read.rlen
-            strand_key = "-" if aligned_read.is_reverse else "+"
+            if not aligned_read.is_unmapped and overlaps_exons(aligned_read, exon_ranges):
+                counts[bucket] += 1
+            continue
 
-            if len(exon_ranges.find(frag_st, frag_end)) > 0:
-                if strand_rule is None:
-                    frag_count_fr += 1
-                elif strand_map.get(strand_key) == "+":
-                    frag_count_f += 1
-                elif strand_map.get(strand_key) == "-":
-                    frag_count_r += 1
+        if aligned_read.is_unmapped and aligned_read.mate_is_unmapped:
+            continue
 
-        if aligned_read.is_paired:
-            frag_st = aligned_read.pos
-            frag_end = aligned_read.pnext
+        frag_st = aligned_read.reference_start
+        mate_st = aligned_read.next_reference_start
+        if (
+            len(exon_ranges.find(frag_st, frag_st + 1)) < 1
+            and len(exon_ranges.find(mate_st, mate_st + 1)) < 1
+        ):
+            continue
 
-            if (
-                len(exon_ranges.find(frag_st, frag_st + 1)) < 1
-                and len(exon_ranges.find(frag_end, frag_end + 1)) < 1
-            ):
+        if aligned_read.is_read2 and not (aligned_read.is_unmapped or aligned_read.mate_is_unmapped):
+            mate_fetched = (
+                aligned_read.next_reference_id == aligned_read.reference_id
+                and mate_st < tx_end
+                and mate_reference_end(aligned_read) > tx_start
+            )
+            if mate_fetched:
+                continue        # counted through read 1
+            # Read 1 is outside this transcript: count the pair here, with
+            # the strand of read 1 (the mate of a read 2 on '+' is on '-').
+            if strand_rule is not None:
+                mate_key = "1" + ("-" if aligned_read.mate_is_reverse else "+")
+                bucket = strand_map.get(mate_key)
+                if bucket is None:
+                    continue
+        elif aligned_read.is_read2:
+            # One mate unmapped: the mapped mate is fetched, and read 2
+            # is only counted when it is that mapped mate.
+            if aligned_read.is_unmapped:
                 continue
 
-            if aligned_read.is_read2:
-                continue
+        if aligned_read.is_unmapped or aligned_read.mate_is_unmapped:
+            counts[bucket] += single_read
+        else:
+            counts[bucket] += 1
 
-            strand_key = "1-" if aligned_read.is_reverse else "1+"
-
-            if strand_rule is None:
-                if aligned_read.is_unmapped:
-                    if aligned_read.mate_is_unmapped:
-                        continue
-                    frag_count_fr += single_read
-                elif aligned_read.mate_is_unmapped:
-                    frag_count_fr += single_read
-                else:
-                    frag_count_fr += 1
-
-            else:
-                if strand_map.get(strand_key) == "+":
-                    if aligned_read.is_unmapped:
-                        if aligned_read.mate_is_unmapped:
-                            continue
-                        frag_count_f += single_read
-                    elif aligned_read.mate_is_unmapped:
-                        frag_count_f += single_read
-                    else:
-                        frag_count_f += 1
-
-                if strand_map.get(strand_key) == "-":
-                    if aligned_read.is_unmapped:
-                        if aligned_read.mate_is_unmapped:
-                            continue
-                        frag_count_r += single_read
-                    elif aligned_read.mate_is_unmapped:
-                        frag_count_r += single_read
-                    else:
-                        frag_count_r += 1
-
-    return frag_count_f, frag_count_r, frag_count_fr
+    return counts["+"], counts["-"], counts[None]
 
 
 def main(argv: Sequence[str] | None = None) -> int:

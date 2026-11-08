@@ -108,6 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of approximately equally spaced transcript positions. Default: %(default)s",
     )
     parser.add_argument(
+        "-q",
+        "--mapq",
+        dest="min_mapq",
+        type=int,
+        default=30,
+        metavar="INT",
+        help="Minimum mapping quality of reads to count. Default: %(default)s",
+    )
+    parser.add_argument(
         "-s",
         "--subtract-background",
         dest="subtract_bg",
@@ -163,6 +172,9 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if args.sample_size <= 0:
         parser.error("--sample-size must be greater than zero")
 
+    if args.min_mapq < 0:
+        parser.error("--mapq cannot be negative")
+
     if args.sample_size > 1000:
         logging.warning(
             "--sample-size is greater than 1000; reduce it if performance is poor"
@@ -217,17 +229,14 @@ def estimate_bg_noise(
     tx_end: int,
     samfile: pysam.AlignmentFile,
     exon_ranges: dict[str, Intersecter],
+    min_mapq: int = 0,
 ) -> float:
     """Estimate transcript background from non-exonic aligned read bases."""
     intron_signal = 0.0
     tree = exon_ranges.get(chromosome)
 
     for aligned_read in samfile.fetch(chromosome, tx_start, tx_end):
-        if aligned_read.is_qcfail:
-            continue
-        if aligned_read.is_unmapped:
-            continue
-        if readfilter.is_non_primary(aligned_read):
+        if not readfilter.passes(aligned_read, min_mapq=min_mapq):
             continue
 
         read_start = aligned_read.reference_start
@@ -305,6 +314,8 @@ def genomic_positions(
             if mrna_size <= sample_size:
                 for start, end in zip(exon_starts, exon_ends):
                     chosen_bases.extend(range(start + 1, end + 1))
+                # tx_start + 1 and tx_end are exon bases too: count them once.
+                chosen_bases = uniqify(chosen_bases)
             else:
                 step_size = max(1, int(mrna_size / sample_size))
                 all_bases: list[int] = []
@@ -334,17 +345,14 @@ def check_min_reads(
     tx_start: int,
     tx_end: int,
     cutoff: int,
+    min_mapq: int = 0,
 ) -> bool:
     """Check the original distinct-read-start coverage criterion."""
     read_starts: set[int] = set()
 
     try:
         for aligned_read in samfile.fetch(chromosome, tx_start, tx_end):
-            if aligned_read.is_qcfail:
-                continue
-            if aligned_read.is_unmapped:
-                continue
-            if readfilter.is_non_primary(aligned_read):
+            if not readfilter.passes(aligned_read, min_mapq=min_mapq):
                 continue
 
             read_start = aligned_read.reference_start
@@ -368,8 +376,16 @@ def genebody_coverage(
     chromosome: str,
     positions: Sequence[int],
     bg_level: float = 0,
+    min_mapq: int = 0,
 ) -> list[float]:
-    """Calculate coverage at sampled positions using the original filters."""
+    """Read coverage at the sampled positions.
+
+    Reads are filtered with :func:`qcmodule.readfilter.passes` (the same
+    rules as the minimum-read check). pysam's default pileup limits are
+    turned off: depth was capped at 8,000 reads and bases below base
+    quality 13 were dropped, which flattened highly expressed transcripts.
+    Overlapping mates of a pair still count once.
+    """
     coverage: list[float] = []
     position_set = set(positions)
     start = positions[0] - 1
@@ -381,6 +397,9 @@ def genebody_coverage(
             start,
             end,
             truncate=True,
+            stepper="nofilter",
+            max_depth=2_000_000_000,
+            min_base_quality=0,
         ):
             reference_position = pileup_column.reference_pos + 1
 
@@ -394,13 +413,9 @@ def genebody_coverage(
             covered_reads = 0.0
 
             for pileup_read in pileup_column.pileups:
-                if pileup_read.is_del:
+                if pileup_read.is_del or pileup_read.is_refskip:
                     continue
-                if pileup_read.alignment.is_qcfail:
-                    continue
-                if readfilter.is_non_primary(pileup_read.alignment):
-                    continue
-                if pileup_read.alignment.is_unmapped:
+                if not readfilter.passes(pileup_read.alignment, min_mapq=min_mapq):
                     continue
 
                 covered_reads += 1.0
@@ -454,6 +469,7 @@ def process_bam(
     subtract_background: bool,
     exon_ranges: dict[str, Intersecter] | None,
     output_dir: Path,
+    min_mapq: int = 30,
 ) -> None:
     """Calculate TIN for one BAM file."""
     tin_path, summary_path = output_paths(bam_file, output_dir)
@@ -491,8 +507,11 @@ def process_bam(
                     tx_start,
                     tx_end,
                     minimum_coverage,
+                    min_mapq,
                 ):
-                    score = 0.0
+                    # Too few reads to measure: NA, not 0 (0 would look like
+                    # a completely degraded transcript).
+                    score = "NA"
                 else:
                     noise_level = 0.0
 
@@ -503,6 +522,7 @@ def process_bam(
                             tx_end,
                             samfile,
                             exon_ranges,
+                            min_mapq,
                         )
                         if intron_size > 0:
                             noise_level = intron_signal / intron_size
@@ -513,6 +533,7 @@ def process_bam(
                         chromosome,
                         positions,
                         noise_level,
+                        min_mapq,
                     )
                     score = tin_score(coverage, len(picked_positions))
                     sample_tins.append(score)
@@ -614,6 +635,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 subtract_background=args.subtract_bg,
                 exon_ranges=exon_ranges,
                 output_dir=args.output_dir,
+                min_mapq=args.min_mapq,
             )
 
     except (

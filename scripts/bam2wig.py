@@ -73,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-multi-hits",
         dest="skip_multi",
         action="store_true",
-        help="Exclude non-unique alignments.",
+        help="Exclude non-unique alignments (MAPQ below --mapq), both from the signal and from the --wigsum total.",
     )
     parser.add_argument(
         "-d",
@@ -202,6 +202,7 @@ def calculate_normalization_factor(
     chrom_sizes: dict[str, int],
     target_wigsum: float | None,
     skip_multi: bool,
+    map_qual: int = 30,
 ) -> float | None:
     """Calculate the WIG normalization factor, when requested."""
     if target_wigsum is None:
@@ -211,6 +212,7 @@ def calculate_normalization_factor(
     wig_sum = alignment.calWigSum(
         chrom_sizes=chrom_sizes,
         skip_multi=skip_multi,
+        q_cut=map_qual,
     )
 
     print(f"Total WIG sum: {wig_sum}", file=sys.stderr)
@@ -247,6 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             chrom_sizes=chrom_sizes,
             target_wigsum=args.total_wigsum,
             skip_multi=args.skip_multi,
+            map_qual=args.map_qual,
         )
 
         alignment = SAM.ParseBAM(str(args.input_file))
