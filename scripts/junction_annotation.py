@@ -167,6 +167,7 @@ def junction_color(annotation: str) -> str:
     """Return the legacy RGB color for a junction class."""
     return {
         "annotated": "205,0,0",
+        "novel_combination": "205,0,205",
         "partial_novel": "0,205,0",
         "complete_novel": "0,0,205",
     }.get(annotation, "0,0,0")

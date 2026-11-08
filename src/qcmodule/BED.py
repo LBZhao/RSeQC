@@ -32,13 +32,29 @@ __version__ = version("RSeQC")
 __author__ = "Liguo Wang"
 
 
+def _open_bed_records(path):
+    """Return the data lines of a BED file as a rewindable text stream.
+
+    Blank lines and ``#``/``track``/``browser`` header lines are dropped, so
+    every ParseBED method sees BED records only (UCSC downloads start with a
+    ``track`` line, which used to crash several methods).
+    """
+    import io
+    with open(path, 'r') as handle:
+        kept = [
+            line for line in handle
+            if line.strip() and not line.startswith(('#', 'track', 'browser'))
+        ]
+    return io.StringIO(''.join(kept))
+
+
 class ParseBED:
     '''manipulate BED (http://genome.ucsc.edu/FAQ/FAQformat.html) format file.'''
     
     def __init__(self,bedFile):
         '''This is constructor of ParseBED'''
         self.transtab = str.maketrans('ACGTNX', 'TGCANX')
-        self.f=open(bedFile,'r')
+        self.f = _open_bed_records(bedFile)
         self.fileName=os.path.basename(bedFile)
         self.ABS_fileName=bedFile
         
@@ -629,7 +645,7 @@ class ParseBED:
                 strand    = fields[5].replace(" ","_")
                 cds_start = int( fields[6] )
                 cds_end   = int( fields[7] )
-                if int(fields[9] ==1):
+                if int(fields[9]) == 1:
                     continue
             
                 exon_starts = list(map( int, fields[11].rstrip( ',\n' ).split( ',' ) ))
@@ -904,7 +920,7 @@ class ParseBED:
             strand    = fields[5].replace(" ","_")
             cds_start = int( fields[6] )
             cds_end   = int( fields[7] )
-            if int(fields[9] ==1):
+            if int(fields[9]) == 1:
                 continue
             
             exon_starts = list(map( int, fields[11].rstrip( ',\n' ).split( ',' ) ))
@@ -1486,7 +1502,7 @@ class CompareBED:
             chrom     = fields[0]
             tx_start = int( fields[1] )
             tx_end   = int( fields[2] )
-            if int(fields[9] ==1):
+            if int(fields[9]) == 1:
                 continue        
             exon_starts = list(map( int, fields[11].rstrip( ',\n' ).split( ',' ) ))
             exon_starts = list(map((lambda x: x + tx_start ), exon_starts))
@@ -1514,7 +1530,7 @@ class CompareBED:
             chrom     = fields[0]
             tx_start = int( fields[1] )
             tx_end   = int( fields[2] )
-            if int(fields[9] ==1):
+            if int(fields[9]) == 1:
                 continue        
             exon_starts = list(map( int, fields[11].rstrip( ',\n' ).split( ',' ) ))
             exon_starts = list(map((lambda x: x + tx_start ), exon_starts))
@@ -1573,7 +1589,7 @@ class CompareBED:
             chrom     = fields[0]
             tx_start = int( fields[1] )
             tx_end   = int( fields[2] )
-            if int(fields[9] ==1):
+            if int(fields[9]) == 1:
                 continue        
             
             exon_starts = list(map( int, fields[11].rstrip( ',\n' ).split( ',' ) ))
@@ -1605,7 +1621,7 @@ class CompareBED:
             geneName = fields[3]
             score = fields[4]
             strand = fields[5]
-            if int(fields[9] ==1):
+            if int(fields[9]) == 1:
                 continue        
             exon_sizes = list(map(int,fields[10].rstrip(',\n').split(',')))
             exon_starts = list(map( int, fields[11].rstrip( ',\n' ).split( ',' ) ))

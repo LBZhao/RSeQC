@@ -168,6 +168,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rscript executable to use. Default: %(default)s",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        metavar="INT",
+        help="Random seed for subsampling, so results are reproducible. Default: %(default)s",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -458,6 +465,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             sample_step=args.percentile_step,
             strand_rule=args.strand_rule,
             q_cut=args.map_qual,
+            seed=args.seed,
         )
 
         if not rpkm_table.is_file():
