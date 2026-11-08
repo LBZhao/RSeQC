@@ -24,6 +24,7 @@ from qcmodule import mystat
 from qcmodule import fasta
 from qcmodule import bam_cigar
 from qcmodule import readfilter
+from qcmodule import sampling
 from qcmodule import BED
 from importlib.metadata import version
 
@@ -75,6 +76,25 @@ def classify_junction(reference, chrom, start, end):
     if known_start or known_end:
         return "partial_novel"
     return "complete_novel"
+
+
+def load_transcript_exons(refbed):
+    """Read a BED12 file into ``[(chrom, tx_start, tx_end, [(start, end), ...]), ...]``."""
+    transcripts = []
+    with open(refbed, 'r') as handle:
+        for line in handle:
+            if not line.strip() or line.startswith(('#', 'track', 'browser')):
+                continue
+            fields = line.split()
+            try:
+                tx_start = int(fields[1])
+                sizes = [int(x) for x in fields[10].rstrip(',').split(',')]
+                starts = [tx_start + int(x) for x in fields[11].rstrip(',').split(',')]
+                transcripts.append((fields[0], tx_start, int(fields[2]),
+                                    sorted((st, st + size) for st, size in zip(starts, sizes))))
+            except (IndexError, ValueError):
+                print("[NOTE:input bed must be 12-column] skipped this line: " + line, end=' ', file=sys.stderr)
+    return transcripts
 
 
 def sampling_percentages(sample_start, sample_end, sample_step):
@@ -212,112 +232,85 @@ class ParseBAM(object):
         print("%-40s%d" % ("Reads mapped in proper pairs:",R_properPair), file=sys.stdout)
         print("%-40s%d" % ("Proper-paired reads map to different chrom:",R_pair_diff_chrom), file=sys.stdout)
     
-    def configure_experiment(self,refbed,sample_size, q_cut = 30):
-        '''Given a BAM/SAM file, this function will try to guess the RNA-seq experiment:
-            1) single-end or pair-end
-            2) strand_specific or not
-            3) if it is strand-specific, what's the strand_ness of the protocol
-        '''
-        
-            #how many reads you want to sample
-        count =0
-        p_strandness=collections.defaultdict(int)
-        s_strandness=collections.defaultdict(int)
-        #load reference gene model
-        gene_ranges={}
-        print("Reading reference gene model " + refbed + ' ...', end=' ', file=sys.stderr)
-        for line in open(refbed,'r'):
-            try:
-                if line.startswith(('#','track','browser')):continue  
-                # Parse fields from gene tabls
-                fields = line.split()
-                chrom     = fields[0]
-                txStart  = int( fields[1] )
-                txEnd    = int( fields[2] )
-                #geneName      = fields[3]
-                strand    = fields[5]
-            except:
-                print("[NOTE:input bed must be 12-column] skipped this line: " + line, file=sys.stderr)
-                continue
-            if chrom not in gene_ranges:
-                gene_ranges[chrom]=Intersecter()
-            gene_ranges[chrom].insert(txStart,txEnd,strand)                         
-        print("Done", file=sys.stderr)      
-        
-        #read SAM/BAM file
-        #current_pos = self.samfile.tell()
-        print("Loading SAM/BAM file ... ", end=' ', file=sys.stderr)
-        try:
-            while(1):
-                if count >= sample_size:
-                    break
-                aligned_read = next(self.samfile)
-                if not readfilter.passes(aligned_read, min_mapq=q_cut):
-                    continue                        #unmapped, secondary, supplementary, QC-failed, duplicate or low MAPQ
-                
-                chrom = self.samfile.getrname(aligned_read.tid)
-                if aligned_read.is_paired:
-                    if aligned_read.is_read1:
-                        read_id = '1'
-                    if aligned_read.is_read2:
-                        read_id = '2'
-                    if aligned_read.is_reverse:
-                        map_strand = '-'
-                    else:
-                        map_strand = '+'
-                    readStart = aligned_read.pos
-                    readEnd = readStart + aligned_read.qlen
-                    if chrom in gene_ranges:
-                        tmp = set(gene_ranges[chrom].find(readStart,readEnd))
-                        if len(tmp) == 0: continue
-                        strand_from_gene = ':'.join(tmp)
-                        p_strandness[read_id + map_strand + strand_from_gene]+=1    
-                        count += 1
-                else:
-                    if aligned_read.is_reverse:
-                        map_strand = '-'
-                    else:
-                        map_strand = '+'                    
-                    readStart = aligned_read.pos
-                    readEnd = readStart + aligned_read.qlen
-                    if chrom in gene_ranges:
-                        tmp = set(gene_ranges[chrom].find(readStart,readEnd))
-                        if len(tmp) == 0: continue
-                        strand_from_gene = ':'.join(tmp)
-                        s_strandness[map_strand + strand_from_gene]+=1
-                        count += 1
+    def configure_experiment(self,refbed,sample_size, q_cut = 30, seed = 0):
+        """Guess the RNA-seq library layout and strandedness.
 
-        except StopIteration:
-            print("Finished", file=sys.stderr)      
-        #self.samfile.seek(current_pos)
-        
+        Reads overlapping annotated transcripts are sampled across the genome
+        (see :func:`qcmodule.sampling.sample_alignments`) and their mapping
+        strand is compared with the strand of the overlapping gene(s).
+
+        Returns ``[protocol, fraction_1, fraction_2, fraction_other]`` where
+        *protocol* is ``"PairEnd"`` or ``"SingleEnd"`` (the layout of most
+        sampled reads; a warning is printed if both occur) or ``"Mixture"``
+        if no usable reads were found.
+        """
+        gene_ranges = {}
+        regions = []
+        print("Reading reference gene model " + refbed + ' ...', end=' ', file=sys.stderr)
+        with open(refbed, 'r') as handle:
+            for line in handle:
+                if not line.strip() or line.startswith(('#', 'track', 'browser')):
+                    continue
+                fields = line.split()
+                try:
+                    chrom = fields[0]
+                    tx_start = int(fields[1])
+                    tx_end = int(fields[2])
+                    strand = fields[5]
+                except (IndexError, ValueError):
+                    print("[NOTE:input bed must be 12-column] skipped this line: " + line, file=sys.stderr)
+                    continue
+                gene_ranges.setdefault(chrom, Intersecter()).insert(tx_start, tx_end, strand)
+                regions.append((chrom, tx_start, tx_end))
+        print("Done", file=sys.stderr)
+
+        p_strandness = collections.defaultdict(int)
+        s_strandness = collections.defaultdict(int)
+
+        def gene_strand(read):
+            """Strand(s) of genes overlapping the read, e.g. '+' or '+:-'."""
+            chrom = read.reference_name
+            if chrom not in gene_ranges or read.reference_end is None:
+                return None
+            strands = set(gene_ranges[chrom].find(read.reference_start, read.reference_end))
+            return ':'.join(sorted(strands)) if strands else None
+
+        def usable(read):
+            return readfilter.passes(read, min_mapq=q_cut) and gene_strand(read) is not None
+
+        print("Loading SAM/BAM file ... ", end=' ', file=sys.stderr)
+        count = 0
+        for read in sampling.sample_alignments(self.samfile, regions, sample_size, usable, seed=seed):
+            map_strand = '-' if read.is_reverse else '+'
+            strand_from_gene = gene_strand(read)
+            if read.is_paired:
+                read_id = '1' if read.is_read1 else '2'
+                p_strandness[read_id + map_strand + strand_from_gene] += 1
+            else:
+                s_strandness[map_strand + strand_from_gene] += 1
+            count += 1
+        print("Finished", file=sys.stderr)
         print("Total " + str(count) + " usable reads were sampled", file=sys.stderr)
-        protocol="unknown"
-        #strandness=None
-        spec1=0.0
-        spec2=0.0
-        other=0.0
-        if len(p_strandness) >0 and len(s_strandness) ==0 :
-            protocol="PairEnd"
-            #for k,v in p_strandness.items():
-            #   print >>sys.stderr, k + '\t' + str(v)
-            spec1= (p_strandness['1++'] + p_strandness['1--'] + p_strandness['2+-'] + p_strandness['2-+'])/float(sum(p_strandness.values()))
-            spec2= (p_strandness['1+-'] + p_strandness['1-+'] + p_strandness['2++'] + p_strandness['2--'])/float(sum(p_strandness.values()))
-            other = 1-spec1-spec2
-            
-        elif len(s_strandness) >0 and len(p_strandness) ==0 :
-            protocol="SingleEnd"
-            #for k,v in s_strandness.items():
-            #   print  >>sys.stderr, k + '\t' + str(v)
-            spec1 = (s_strandness['++'] + s_strandness['--'])/float(sum(s_strandness.values()))
-            spec2 = (s_strandness['+-'] + s_strandness['-+'])/float(sum(s_strandness.values()))
-            other = 1-spec1-spec2
-        else:
-            protocol="Mixture"
-            spec1 = 0
-            spec2 = 0
-            other = 0
-        return [protocol,spec1,spec2,other]
+
+        n_paired = sum(p_strandness.values())
+        n_single = sum(s_strandness.values())
+        if n_paired and n_single:
+            print(
+                f"Warning: sample contains both paired ({n_paired}) and unpaired "
+                f"({n_single}) reads; reporting the {'paired' if n_paired >= n_single else 'unpaired'} reads only.",
+                file=sys.stderr,
+            )
+        if n_paired and n_paired >= n_single:
+            total = float(n_paired)
+            spec1 = (p_strandness['1++'] + p_strandness['1--'] + p_strandness['2+-'] + p_strandness['2-+']) / total
+            spec2 = (p_strandness['1+-'] + p_strandness['1-+'] + p_strandness['2++'] + p_strandness['2--']) / total
+            return ["PairEnd", spec1, spec2, 1 - spec1 - spec2]
+        if n_single:
+            total = float(n_single)
+            spec1 = (s_strandness['++'] + s_strandness['--']) / total
+            spec2 = (s_strandness['+-'] + s_strandness['-+']) / total
+            return ["SingleEnd", spec1, spec2, 1 - spec1 - spec2]
+        return ["Mixture", 0, 0, 0]
 
     def bamTowig(self,outfile,chrom_sizes, chrom_file,skip_multi=True,strand_rule=None,WigSumFactor=None,q_cut=30):
         """Convert BAM/SAM file to wig file. chrom_size is dict with chrom as key and chrom_size as value
@@ -579,15 +572,16 @@ class ParseBAM(object):
         if self.bam_format:print("Read BAM file ... ", end=' ', file=sys.stderr)
         else:print("Read SAM file ... ", end=' ', file=sys.stderr)
 
+        max_len = 0     # longest read: positions run 0 .. max_len-1 (reads may be trimmed)
         try:
             while(1):
                 aligned_read = next(self.samfile)
                 if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                 if aligned_read.mapq < q_cut: continue
-                #if aligned_read.is_unmapped:continue   #skip unmapped read
-                #if aligned_read.is_qcfail:continue #skip low quality
+                if not aligned_read.query_sequence: continue           #SEQ is '*'
 
                 RNA_read = aligned_read.seq.upper()     
+                max_len = max(max_len, len(RNA_read))
                 if aligned_read.is_reverse:
                     RNA_read = RNA_read.translate(transtab)[::-1]
                 for i,j in enumerate(RNA_read):
@@ -598,7 +592,7 @@ class ParseBAM(object):
         
         print("generating data matrix ...", file=sys.stderr)
         print("Position\tA\tC\tG\tT\tN\tX", file=FO)
-        for i in range(len(RNA_read)):
+        for i in range(max_len):
             print(str(i) + '\t', end=' ', file=FO)
             print(str(base_freq[str(i) + "A"]) + '\t', end=' ', file=FO)
             a_count.append(str(base_freq[str(i) + "A"]))
@@ -616,7 +610,7 @@ class ParseBAM(object):
         
         #generating R scripts
         print("generating R script  ...", file=sys.stderr)
-        print("position=c(" + ','.join([str(i) for i in range(len(RNA_read))]) + ')', file=RS)
+        print("position=c(" + ','.join([str(i) for i in range(max_len)]) + ')', file=RS)
         print("A_count=c(" + ','.join(a_count) + ')', file=RS)
         print("C_count=c(" + ','.join(c_count) + ')', file=RS)
         print("G_count=c(" + ','.join(g_count) + ')', file=RS)
@@ -636,7 +630,7 @@ class ParseBAM(object):
             print('lines(position,C_count/total,type="o",pch=20,col="cyan")', file=RS)
             print('lines(position,N_count/total,type="o",pch=20,col="black")', file=RS)     
             print('lines(position,X_count/total,type="o",pch=20,col="grey")', file=RS)  
-            print('legend('+ str(len(RNA_read)-10) + ',ym,legend=c("A","T","G","C","N","X"),col=c("dark green","red","blue","cyan","black","grey"),lwd=2,pch=20,text.col=c("dark green","red","blue","cyan","black","grey"))', file=RS)
+            print('legend('+ str(max_len-10) + ',ym,legend=c("A","T","G","C","N","X"),col=c("dark green","red","blue","cyan","black","grey"),lwd=2,pch=20,text.col=c("dark green","red","blue","cyan","black","grey"))', file=RS)
             print("dev.off()", file=RS)
         else:
             print("total= A_count + C_count + G_count + T_count", file=RS)
@@ -648,7 +642,7 @@ class ParseBAM(object):
             print('lines(position,T_count/total,type="o",pch=20,col="red")', file=RS)
             print('lines(position,G_count/total,type="o",pch=20,col="blue")', file=RS)
             print('lines(position,C_count/total,type="o",pch=20,col="cyan")', file=RS)
-            print('legend('+ str(len(RNA_read)-10) + ',ym,legend=c("A","T","G","C"),col=c("dark green","red","blue","cyan"),lwd=2,pch=20,text.col=c("dark green","red","blue","cyan"))', file=RS)
+            print('legend('+ str(max_len-10) + ',ym,legend=c("A","T","G","C"),col=c("dark green","red","blue","cyan"),lwd=2,pch=20,text.col=c("dark green","red","blue","cyan"))', file=RS)
             print("dev.off()", file=RS)
         
         RS.close()
@@ -668,16 +662,16 @@ class ParseBAM(object):
         q_min = 10000
         q_list=[]
         i_box={}    #key is read postion,value is 
+        read_len = 0
         try:
             while(1):
                 aligned_read = next(self.samfile)
                 if readfilter.is_non_primary(aligned_read): continue   #skip secondary/supplementary records (same read counted twice)
                 if aligned_read.mapq < q_cut: continue
-                #if aligned_read.is_unmapped:continue   #skip unmapped read
-                #if aligned_read.is_qcfail:continue     #skip low quality
-                
+                if not aligned_read.query_qualities: continue          #QUAL is '*'
+
                 qual_str = aligned_read.qqual
-                read_len = aligned_read.rlen
+                read_len = max(read_len, len(qual_str))    # longest read (reads may be trimmed)
                 if aligned_read.is_reverse:
                     qual_str = qual_str[::-1]
 
@@ -1219,159 +1213,124 @@ class ParseBAM(object):
             print('plot(read_pos, r2_insert_count*100/(r2_insert_count + r2_noninsert_count),col="blue",main="Insertion profile",xlab="Position of read (read-2)",ylab="Insertion %",type="b")', file=ROUT)
             print("dev.off()", file=ROUT)
     
-    def mRNA_inner_distance(self,outfile,refbed,low_bound=0,up_bound=1000,step=10,sample_size=1000000, q_cut=30):
-        '''estimate the inner distance of mRNA pair end fragment. fragment size = insert_size + 2 x read_length'''
-        
-        out_file1 = outfile + ".inner_distance.txt" 
+    def mRNA_inner_distance(self,outfile,refbed,low_bound=0,up_bound=1000,step=10,sample_size=1000000, q_cut=30, seed=0):
+        """Estimate the inner distance (insert size minus both read lengths)
+        of paired-end fragments.
+
+        For each sampled pair the genomic gap between the end of the leftmost
+        read and the start of its mate is measured. If both reads lie in the
+        same transcript, only exonic bases of that transcript's exons (all its
+        isoforms) are counted, giving the distance on the mRNA. Overlapping
+        mates give a negative distance. Pairs are sampled across the genome
+        (see :mod:`qcmodule.sampling`).
+
+        The mean, median and SD printed by the R script use only pairs inside
+        ``[low_bound, up_bound)``; the numbers of pairs outside that window
+        are reported on stderr.
+        """
+        out_file1 = outfile + ".inner_distance.txt"
         out_file2 = outfile + ".inner_distance_freq.txt"
         out_file3 = outfile + ".inner_distance_plot.r"
-        
-        FO=open(out_file1,'w')
-        FQ=open(out_file2,'w')
-        RS=open(out_file3,'w')
-        
-        fchrom="chr100"     #this is the fake chromosome
-        ranges={}
-        ranges[fchrom]=Intersecter()
-        
-        window_left_bound = list(range(low_bound,up_bound,step))
-        #frag_size=0
-        
-        inner_distance_bitsets=BinnedBitSet()
-        tmp = BinnedBitSet()
-        tmp.set_range(0,0)
-        pair_num=0
-        sizes=[]
-        counts=[]
-        count=0
-        
+
+        window_left_bound = list(range(low_bound, up_bound, step))
+        distances = []
+        sizes = []
+        counts = []
+
         print("Get exon regions from " + refbed + " ...", file=sys.stderr)
-        bed_obj = BED.ParseBED(refbed)
-        ref_exons = []
-        
-        for exn in bed_obj.getExon():
-            ref_exons.append([exn[0].upper(), exn[1], exn[2]])
-        exon_bitsets = binned_bitsets_from_list(ref_exons)
-        
+        transcripts = load_transcript_exons(refbed)
         transcript_ranges = {}
-        for i_chr, i_st, i_end, i_strand, i_name in bed_obj.getTranscriptRanges():
-            i_chr = i_chr.upper()
-            if i_chr not in transcript_ranges:
-                transcript_ranges[i_chr] = Intersecter()
-            else:
-                transcript_ranges[i_chr].add_interval(Interval(i_st, i_end, value=i_name))
-        
+        regions = []
+        for index, (chrom, tx_start, tx_end, _exons) in enumerate(transcripts):
+            transcript_ranges.setdefault(chrom.upper(), Intersecter()).add_interval(
+                Interval(tx_start, tx_end, value=index)
+            )
+            regions.append((chrom, tx_start, tx_end))
+
+        def transcripts_at(chrom, start, end):
+            tree = transcript_ranges.get(chrom)
+            return {iv.value for iv in tree.find(start, end)} if tree is not None else set()
+
+        def usable(read):
+            if not readfilter.passes(read, min_mapq=q_cut):
+                return False
+            if not read.is_paired or read.mate_is_unmapped:
+                return False
+            # Each pair is measured once, from its leftmost read.
+            if read.next_reference_id == read.reference_id:
+                if read.next_reference_start < read.reference_start:
+                    return False
+                if read.next_reference_start == read.reference_start and read.is_read1:
+                    return False
+            return True
+
         if self.bam_format:print("Load BAM file ... ", end=' ', file=sys.stderr)
         else:print("Load SAM file ... ", end=' ', file=sys.stderr)
 
-        try:
-            while(1):
-                if pair_num >= sample_size:
-                    break
-                splice_intron_size=0
-                aligned_read = next(self.samfile)
-                if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
-                if not aligned_read.is_paired: continue     #skip single map read
-                if aligned_read.mate_is_unmapped:continue   #
-                if aligned_read.mapq < q_cut:continue
-                
-                read1_len = aligned_read.qlen
-                read1_start = aligned_read.pos
-                read2_start = aligned_read.mpos     #0-based, not included
-                if read2_start < read1_start:
-                    continue                                #because BAM file is sorted, mate_read is already processed if its coordinate is smaller
-                if  read2_start == read1_start and aligned_read.is_read1:
-                    inner_distance = 0
+        pair_num = 0
+        with open(out_file1, 'w') as FO:
+            for aligned_read in sampling.sample_alignments(self.samfile, regions, sample_size, usable, seed=seed):
+                pair_num += 1
+                if aligned_read.next_reference_id != aligned_read.reference_id:
+                    FO.write(aligned_read.query_name + '\tNA\tsameChrom=No\n')
                     continue
-                
-                pair_num +=1
 
-                # check if reads were mapped to diff chromsomes
-                R_read1_ref = self.samfile.getrname(aligned_read.tid)
-                R_read2_ref = self.samfile.getrname(aligned_read.rnext)
-                if R_read1_ref != R_read2_ref:
-                    FO.write(aligned_read.qname + '\t' + 'NA' + '\tsameChrom=No\n') #reads mapped to different chromosomes
-                    continue
-                
-                
-                chrom = self.samfile.getrname(aligned_read.tid).upper()
-                intron_blocks = bam_cigar.fetch_intron(chrom, read1_start, aligned_read.cigar)              
-                for intron in intron_blocks:
-                    splice_intron_size += intron[2] - intron[1]
-                read1_end = read1_start + read1_len + splice_intron_size        
-                
+                chrom = aligned_read.reference_name.upper()
+                read1_end = aligned_read.reference_end
+                read2_start = aligned_read.next_reference_start
+
                 if read2_start >= read1_end:
                     inner_distance = read2_start - read1_end
                 else:
-                    exon_positions = []
-                    exon_blocks = bam_cigar.fetch_exon(chrom, read1_start,aligned_read.cigar)
-                    for ex in exon_blocks:
-                        for i in range(ex[1]+1,ex[2]+1):
-                            exon_positions.append(i)
-                    inner_distance = -len([i for i in exon_positions if i > read2_start and i <= read1_end])
-                #print aligned_read.qname,read1_end, read2_start
-                
-                read1_gene_names = set()    #read1_end
-                try:
-                    for gene in transcript_ranges[chrom].find(read1_end-1, read1_end):  #gene: Interval(0, 10, value=a)
-                        read1_gene_names.add(gene.value)
-                except:
-                    pass
-                
-                read2_gene_names = set()    #read2_start
-                try:
-                    for gene in transcript_ranges[chrom].find(read2_start, read2_start +1): #gene: Interval(0, 10, value=a)
-                        read2_gene_names.add(gene.value)
-                except:
-                    pass
-                    
-                if len(read1_gene_names.intersection(read2_gene_names)) == 0:   # no common gene
-                    FO.write(aligned_read.qname + '\t' + str(inner_distance) + '\tsameTranscript=No,dist=genomic\n')        #reads mapped to different gene
-                    ranges[fchrom].add_interval( Interval( inner_distance-1, inner_distance ) )     
-                    continue            
+                    # Mates overlap: minus the read-1 aligned bases at or after the mate start.
+                    inner_distance = -sum(
+                        max(0, end - max(start, read2_start))
+                        for start, end in aligned_read.get_blocks()
+                    )
 
-                if inner_distance > 0: 
-                    if chrom in exon_bitsets:
-                        size =0 
-                        inner_distance_bitsets.set_range(read1_end, read2_start-read1_end)
-                        inner_distance_bitsets.iand(exon_bitsets[chrom])
-                        end=0
-                        while 1:
-                            start = inner_distance_bitsets.next_set( end )
-                            if start == inner_distance_bitsets.size: break
-                            end = inner_distance_bitsets.next_clear( start )
-                            size += (end - start)
-                        inner_distance_bitsets.iand(tmp)                                            #clear BinnedBitSet
-                        
-                        if size == inner_distance:
-                            FO.write(aligned_read.qname + '\t' + str(size) + '\tsameTranscript=Yes,sameExon=Yes,dist=mRNA\n')
-                            ranges[fchrom].add_interval( Interval( size-1, size ) )
-                        elif size > 0 and size < inner_distance:
-                            FO.write(aligned_read.qname + '\t' + str(size) + '\tsameTranscript=Yes,sameExon=No,dist=mRNA\n')
-                            ranges[fchrom].add_interval( Interval( size-1, size ) ) 
-                        elif size <= 0:
-                            FO.write(aligned_read.qname + '\t' + str(inner_distance) + '\tsameTranscript=Yes,nonExonic=Yes,dist=genomic\n')
-                            ranges[fchrom].add_interval( Interval( inner_distance-1, inner_distance ) )     
-                    else:
-                        FO.write(aligned_read.qname + '\t' + str(inner_distance) + '\tunknownChromosome,dist=genomic')
-                        ranges[fchrom].add_interval( Interval( inner_distance-1, inner_distance ) )
+                shared = transcripts_at(chrom, read1_end - 1, read1_end) & transcripts_at(chrom, read2_start, read2_start + 1)
+                if not shared:
+                    label = 'sameTranscript=No,dist=genomic'
+                    value = inner_distance
+                elif inner_distance <= 0:
+                    label = 'readPairOverlap'
+                    value = inner_distance
                 else:
-                    FO.write(aligned_read.qname + '\t' + str(inner_distance) + '\treadPairOverlap\n')
-                    ranges[fchrom].add_interval( Interval( inner_distance-1, inner_distance ) )
-                
-        except StopIteration:
-            print("Done", file=sys.stderr)
-        
+                    exons = BED.unionBed3([[chrom, st, end] for i in shared for st, end in transcripts[i][3]])
+                    size = sum(
+                        max(0, min(end, read2_start) - max(st, read1_end))
+                        for _, st, end in exons
+                    )
+                    if size == inner_distance:
+                        label = 'sameTranscript=Yes,sameExon=Yes,dist=mRNA'
+                        value = size
+                    elif size > 0:
+                        label = 'sameTranscript=Yes,sameExon=No,dist=mRNA'
+                        value = size
+                    else:
+                        label = 'sameTranscript=Yes,nonExonic=Yes,dist=genomic'
+                        value = inner_distance
+                FO.write(aligned_read.query_name + '\t' + str(value) + '\t' + label + '\n')
+                distances.append(value)
+        print("Done", file=sys.stderr)
+
         print("Total read pairs  used " + str(pair_num), file=sys.stderr)
         if pair_num==0:
             print("Cannot find paired reads", file=sys.stderr)
             sys.exit(0)
-        
+        below = sum(1 for d in distances if d <= low_bound)
+        above = sum(1 for d in distances if d > up_bound)
+        print(f"Pairs with inner distance <= {low_bound}: {below}; > {up_bound}: {above}. "
+              "These are not included in the histogram or in the mean/median/SD.", file=sys.stderr)
+
+        # Bin (st, st + step]: the same bins as earlier releases.
+        FQ = open(out_file2, 'w')
+        RS = open(out_file3, 'w')
         for st in window_left_bound:
             sizes.append(str(st + step/2))
-            count = str(len(ranges[fchrom].find(st,st + step)))
+            count = str(sum(1 for d in distances if st < d <= st + step))
             counts.append(count)
-            print(str(st) + '\t' + str(st+step) +'\t' + count, file=FQ)     
+            print(str(st) + '\t' + str(st+step) +'\t' + count, file=FQ)
         print("out_file = \'%s\'" % outfile, file=RS)
         print("pdf(\'%s\')" % (outfile + ".inner_distance_plot.pdf"), file=RS)
         #print >>RS, "par(mfrow=c(2,1),cex.main=0.8,cex.lab=0.8,cex.axis=0.8,mar=c(4,4,4,1))"
@@ -1385,7 +1344,6 @@ class ParseBAM(object):
         print('hist(fragsize,probability=T,breaks=%d,xlab="mRNA insert size (bp)",main=paste(c("Mean=",frag_mean,";","SD=",frag_sd),collapse=""),border="blue")' % len(window_left_bound), file=RS)
         print("lines(density(fragsize,bw=%d),col='red')" % (2*step), file=RS)
         print("dev.off()", file=RS)
-        FO.close()
         FQ.close()
         RS.close()
         #self.f.seek(0)

@@ -440,6 +440,8 @@ class ParseBED:
             txEnd=int(fields[2])
             cdsStart=int(fields[6])
             cdsEnd=int(fields[7])       
+            if cdsStart == cdsEnd:      # non-coding transcript: no UTRs (see getNoncodingExon)
+                continue
             exon_start=list(map(int,fields[11].rstrip(',').split(',')))
             exon_start=list(map((lambda x: x + txStart),exon_start))
                 
@@ -496,6 +498,26 @@ class ParseBED:
         self.f.seek(0)
         return ret_lst
 
+    def getNoncodingExon(self):
+        """Exons of non-coding transcripts (thickStart == thickEnd) as
+        ``[chrom, start, end]`` lists.
+
+        Before RSeQC 5.1.0 these exons were reported as 5' or 3' UTR,
+        depending on where the BED file put thickStart/thickEnd.
+        """
+        ret_lst = []
+        for line in self.f:
+            f = line.split()
+            if int(f[6]) != int(f[7]):
+                continue
+            chrom_start = int(f[1])
+            sizes = [int(i) for i in f[10].strip(',').split(',')]
+            starts = [chrom_start + int(i) for i in f[11].strip(',').split(',')]
+            for base, size in zip(starts, sizes):
+                ret_lst.append([f[0], base, base + size])
+        self.f.seek(0)
+        return ret_lst
+
     def getTranscriptRanges(self):
         '''Extract exon regions from input bed file (must be 12-column). Return ranges of
         transcript'''
@@ -530,6 +552,8 @@ class ParseBED:
             strand = f[5]
             cdsStart = int(f[6])
             cdsEnd = int(f[7])
+            if cdsStart == cdsEnd:      # non-coding transcript: no CDS
+                continue
             blockCount = int(f[9])
             blockSizes = [ int(i) for i in f[10].strip(',').split(',') ]
             blockStarts = [ chrom_start + int(i) for i in f[11].strip(',').split(',') ]

@@ -47,9 +47,13 @@ Each aligned block is assigned by its midpoint using this order:
 1. CDS exon
 2. 5' UTR
 3. 3' UTR
-4. Intron
-5. Upstream/downstream intergenic bins
-6. Unassigned
+4. Exon of a non-coding transcript (BED thickStart == thickEnd)
+5. Intron
+6. Upstream/downstream intergenic bins
+7. Unassigned
+
+Reads that are unmapped, secondary, supplementary, QC-failed, duplicates or
+below --mapq are not counted.
 
 Example
 -------
@@ -65,6 +69,7 @@ class RegionModel:
     intron: dict[str, Intersecter]
     utr_5: dict[str, Intersecter]
     utr_3: dict[str, Intersecter]
+    noncoding_exon: dict[str, Intersecter]
     upstream_1kb: dict[str, Intersecter]
     upstream_5kb: dict[str, Intersecter]
     upstream_10kb: dict[str, Intersecter]
@@ -76,6 +81,7 @@ class RegionModel:
     intron_bases: int
     utr_5_bases: int
     utr_3_bases: int
+    noncoding_exon_bases: int
     upstream_1kb_bases: int
     upstream_5kb_bases: int
     upstream_10kb_bases: int
@@ -96,6 +102,7 @@ class DistributionCounts:
     intron: int = 0
     utr_5: int = 0
     utr_3: int = 0
+    noncoding_exon: int = 0
 
     upstream_1kb: int = 0
     upstream_5kb: int = 0
@@ -109,6 +116,7 @@ class DistributionCounts:
     secondary_reads: int = 0
     supplementary_reads: int = 0
     unmapped_reads: int = 0
+    low_mapq_reads: int = 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -133,6 +141,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=Path,
         help="Reference gene model in BED format.",
+    )
+    parser.add_argument(
+        "-q",
+        "--mapq",
+        dest="min_mapq",
+        type=int,
+        default=30,
+        metavar="INT",
+        help="Minimum mapping quality of reads to count. Default: %(default)s",
     )
     parser.add_argument(
         "--version",
@@ -199,21 +216,14 @@ def overlaps_point(
     if tree is None:
         return False
 
-    return bool(tree.find(position, position))
+    return bool(tree.find(position, position + 1))
 
 
-def purify_regions(
-    regions,
-    cds_exon,
-    utr_5,
-    utr_3,
-    intron,
-):
+def purify_regions(regions, *genic):
     """Remove annotated genic regions from a flanking-region set."""
-    result = BED.subtractBed3(regions, cds_exon)
-    result = BED.subtractBed3(result, utr_5)
-    result = BED.subtractBed3(result, utr_3)
-    result = BED.subtractBed3(result, intron)
+    result = regions
+    for region_set in genic:
+        result = BED.subtractBed3(result, region_set)
     return result
 
 
@@ -228,12 +238,15 @@ def process_gene_model(gene_model: Path) -> RegionModel:
     cds_exon = BED.unionBed3(bed.getCDSExon())
     intron = BED.unionBed3(bed.getIntron())
 
+    noncoding_exon = BED.unionBed3(bed.getNoncodingExon())
+
     utr_5 = BED.subtractBed3(utr_5, cds_exon)
     utr_3 = BED.subtractBed3(utr_3, cds_exon)
+    for region_set in (cds_exon, utr_5, utr_3):
+        noncoding_exon = BED.subtractBed3(noncoding_exon, region_set)
 
-    intron = BED.subtractBed3(intron, cds_exon)
-    intron = BED.subtractBed3(intron, utr_5)
-    intron = BED.subtractBed3(intron, utr_3)
+    for region_set in (cds_exon, utr_5, utr_3, noncoding_exon):
+        intron = BED.subtractBed3(intron, region_set)
 
     upstream_1kb = BED.unionBed3(
         bed.getIntergenic(direction="up", size=1_000)
@@ -255,22 +268,22 @@ def process_gene_model(gene_model: Path) -> RegionModel:
     )
 
     upstream_1kb = purify_regions(
-        upstream_1kb, cds_exon, utr_5, utr_3, intron
+        upstream_1kb, cds_exon, utr_5, utr_3, noncoding_exon, intron
     )
     upstream_5kb = purify_regions(
-        upstream_5kb, cds_exon, utr_5, utr_3, intron
+        upstream_5kb, cds_exon, utr_5, utr_3, noncoding_exon, intron
     )
     upstream_10kb = purify_regions(
-        upstream_10kb, cds_exon, utr_5, utr_3, intron
+        upstream_10kb, cds_exon, utr_5, utr_3, noncoding_exon, intron
     )
     downstream_1kb = purify_regions(
-        downstream_1kb, cds_exon, utr_5, utr_3, intron
+        downstream_1kb, cds_exon, utr_5, utr_3, noncoding_exon, intron
     )
     downstream_5kb = purify_regions(
-        downstream_5kb, cds_exon, utr_5, utr_3, intron
+        downstream_5kb, cds_exon, utr_5, utr_3, noncoding_exon, intron
     )
     downstream_10kb = purify_regions(
-        downstream_10kb, cds_exon, utr_5, utr_3, intron
+        downstream_10kb, cds_exon, utr_5, utr_3, noncoding_exon, intron
     )
 
     model = RegionModel(
@@ -278,6 +291,7 @@ def process_gene_model(gene_model: Path) -> RegionModel:
         intron=build_interval_trees(intron),
         utr_5=build_interval_trees(utr_5),
         utr_3=build_interval_trees(utr_3),
+        noncoding_exon=build_interval_trees(noncoding_exon),
         upstream_1kb=build_interval_trees(upstream_1kb),
         upstream_5kb=build_interval_trees(upstream_5kb),
         upstream_10kb=build_interval_trees(upstream_10kb),
@@ -288,6 +302,7 @@ def process_gene_model(gene_model: Path) -> RegionModel:
         intron_bases=calculate_size(intron),
         utr_5_bases=calculate_size(utr_5),
         utr_3_bases=calculate_size(utr_3),
+        noncoding_exon_bases=calculate_size(noncoding_exon),
         upstream_1kb_bases=calculate_size(upstream_1kb),
         upstream_5kb_bases=calculate_size(upstream_5kb),
         upstream_10kb_bases=calculate_size(upstream_10kb),
@@ -324,6 +339,10 @@ def assign_tag(
 
     if overlaps_5utr and overlaps_3utr:
         counts.unassigned_tags += 1
+        return
+
+    if overlaps_point(chromosome, model.noncoding_exon, midpoint):
+        counts.noncoding_exon += 1
         return
 
     if overlaps_point(chromosome, model.intron, midpoint):
@@ -377,6 +396,7 @@ def assign_tag(
 def count_read_distribution(
     input_file: Path,
     model: RegionModel,
+    min_mapq: int = 30,
 ) -> DistributionCounts:
     """Count read-block distribution using the original algorithm."""
     counts = DistributionCounts()
@@ -405,13 +425,17 @@ def count_read_distribution(
             counts.unmapped_reads += 1
             continue
 
+        if aligned_read.mapping_quality < min_mapq:
+            counts.low_mapq_reads += 1
+            continue
+
         counts.total_reads += 1
 
         chromosome = alignment_file.getrname(aligned_read.tid).upper()
         exons = bam_cigar.fetch_exon(
             chromosome,
-            aligned_read.pos,
-            aligned_read.cigar,
+            aligned_read.reference_start,
+            aligned_read.cigartuples,
         )
         counts.total_tags += len(exons)
 
@@ -469,6 +493,7 @@ def print_report(
     print_row("CDS_Exons", model.cds_exon_bases, counts.cds_exon)
     print_row("5'UTR_Exons", model.utr_5_bases, counts.utr_5)
     print_row("3'UTR_Exons", model.utr_3_bases, counts.utr_3)
+    print_row("Noncoding_Exons", model.noncoding_exon_bases, counts.noncoding_exon)
     print_row("Introns", model.intron_bases, counts.intron)
 
     print_row(
@@ -515,10 +540,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         input_file=args.input_file,
         ref_gene_model=args.ref_gene_model,
     )
+    if args.min_mapq < 0:
+        parser.error("--mapq cannot be negative")
 
     try:
         model = process_gene_model(args.ref_gene_model)
-        counts = count_read_distribution(args.input_file, model)
+        counts = count_read_distribution(args.input_file, model, args.min_mapq)
         print_report(model, counts)
 
     except (OSError, ValueError, RuntimeError, IndexError) as exc:

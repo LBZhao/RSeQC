@@ -140,6 +140,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rscript executable to use. Default: %(default)s",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        metavar="INT",
+        help="Random seed for choosing which genes to sample pairs from. Default: %(default)s",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -259,6 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             step=args.step_size,
             refbed=str(args.ref_gene),
             sample_size=args.sample_size,
+            seed=args.seed,
             q_cut=args.map_qual,
         )
     except (OSError, ValueError, RuntimeError) as exc:

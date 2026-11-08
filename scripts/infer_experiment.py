@@ -97,6 +97,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        metavar="INT",
+        help=(
+            "Random seed for choosing which genes to sample reads from. "
+            "Default: %(default)s"
+        ),
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -205,6 +215,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 refbed=str(args.refgene_bed),
                 sample_size=args.sample_size,
                 q_cut=args.map_qual,
+                seed=args.seed,
             )
         )
     except (OSError, ValueError, RuntimeError) as exc:
