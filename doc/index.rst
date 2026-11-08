@@ -25,6 +25,43 @@ installed directly from `PyPI <https://pypi.org/project/RSeQC/>`_ or from the `G
 Release history
 ===================
 
+**RSeQC v5.1.0**
+
+* Nov. 8, 2026
+
+* Rewrote ``geneBody_coverage.py``. Results differ from earlier releases; see below.
+
+  * Each transcript is split into 100 equal slices of its mRNA and the **mean
+    coverage of every slice** is measured. Earlier releases sampled a single
+    base per percentile and, at splice junctions, could sample intronic
+    positions; transcripts of exactly 100 bp could also lose a point, shifting
+    their profile.
+  * Coverage is no longer capped at 8,000 reads per base (the pysam pileup
+    default), and bases are no longer silently dropped below base quality 13.
+    Overlapping mates of a pair are counted once, as before.
+  * New ``--transcript-norm`` (default ``mean``): every transcript is scaled to
+    its own mean so highly expressed genes no longer dominate the curve.
+    ``--transcript-norm none`` restores raw summing.
+  * New ``--min-coverage`` (default 5 with ``mean``), ``--mapq`` (default 30),
+    ``-p/--processes`` and ``--per-transcript`` options.
+  * New ``--length-bins`` (default ``1000,2000,4000``): coverage profiles by
+    mRNA length (<1 kb, 1-2 kb, 2-4 kb, >=4 kb), written to
+    ``*.geneBodyCoverage.byLength.txt`` and plotted in
+    ``*.geneBodyCoverage.byLength.pdf``.
+  * New ``*.geneBodyCoverage.metrics.txt`` with a directional **3'/5' ratio**
+    and a **uniformity CV**, overall and per length bin. The old "skewness"
+    score is kept as ``Skewness_deprecated``; it cannot distinguish 5' from 3'
+    bias.
+  * Plots show coverage relative to each profile's mean (1.0 = uniform)
+    instead of min-max scaling, which exaggerated small differences and failed
+    on flat profiles.
+  * Reads coverage once per gene cluster instead of running a pileup per
+    transcript; about 9x faster in our benchmark.
+  * The log is written to ``PREFIX.geneBodyCoverage.log.txt`` instead of
+    ``log.txt`` in the working directory.
+
+* Added unit and end-to-end tests (``tests/``), run in CI.
+
 **RSeQC v5.0.6**
 
 * Oct. 19, 2026
@@ -694,44 +731,81 @@ geneBody_coverage.py
 --------------------------------
 **Calculate the RNA-seq reads coverage over gene body.**
 
-Ihis workflow is illustrated below:
+How it works:
 
-1. If 3 or more BAM files were provided. This program generated a lineGraph and a heatmap.
-   If less than 3 BAM files were provided, only lineGraph was generated. See below for examples.
-2. When heatmap was generated, samples were ranked by the "skewness" of the coverage:
-   Sample with best (worst) coverage will be displayed at the top (bottom) of the heatmap.
-3. Coverage skewness was measured by `Pearson's skewness coefficients <http://en.wikipedia.org/wiki/Skewness#Pearson.27s_skewness_coefficients>`_
+1. Each BED12 transcript is reduced to its exons (the mature mRNA) and split
+   into 100 equal slices from 5' to 3'. The mean read coverage of every slice
+   is measured, so every exonic base contributes. Minus-strand transcripts are
+   reversed so slice 1 is always the 5' end.
+2. By default (``--transcript-norm mean``) each transcript's profile is scaled
+   to its own mean before averaging, so every transcript carries equal weight.
+   Transcripts with mean coverage below ``--min-coverage`` are skipped.
+3. Profiles are reported for all transcripts together and, separately, for
+   mRNA length bins (``--length-bins``, default <1 kb, 1-2 kb, 2-4 kb,
+   >=4 kb). 3' bias caused by RNA degradation is usually strongest in long
+   transcripts.
+4. A line graph is drawn for all samples, a heatmap for 3 or more samples,
+   and one panel per length bin. Curves show coverage relative to their mean:
+   a flat line at 1.0 is perfectly uniform coverage.
+5. ``*.metrics.txt`` reports, overall and per length bin, the **3'/5' ratio**
+   (mean of slices 81-95 divided by mean of slices 6-20; 1 = even, >1 = 3'
+   bias, <1 = 5' bias) and the **uniformity CV** (coefficient of variation of
+   slices 10-90; lower is more uniform). Heatmap rows are ordered by how close
+   the 3'/5' ratio is to 1.
 
 NOTE:
 
  * Only input **sorted** and **indexed** BAM file(s).
  * Genes/transcripts with mRNA length < 100 will be skipped (Number specified to "-l" cannot be < 100).
+ * Reads that are unmapped, secondary, supplementary, QC-failed, duplicates,
+   or below ``--mapq`` are ignored. Only aligned bases count (no introns,
+   deletions or soft clips), and overlapping mates of a pair are counted once.
+ * Results differ from RSeQC <= 5.0.6. Use ``--transcript-norm none --mapq 0``
+   for the closest match to the old behavior.
 
 .. image:: _static/geneBody_workflow.png
    :height: 600 px
    :width: 1200 px
    :scale: 80 %
 
-Options:
-  --version             show program's version number and exit
-  -h, --help            show this help message and exit
-  -i INPUT_FILES, --input=INPUT_FILES
-                        Input file(s) in BAM format. "-i" takes these input:
-                        1) a single BAM file. 2) "," separated BAM files. 3)
-                        directory containing one or more bam files. 4) plain
-                        text file containing the path of one or more bam file
-                        (Each row is a BAM file path). All BAM files should be
-                        sorted and indexed using samtools.
-  -r REF_GENE_MODEL, --refgene=REF_GENE_MODEL
-                        Reference gene model in bed format. [required]
-  -l MIN_MRNA_LENGTH, --minimum_length=MIN_MRNA_LENGTH
-                        Minimum mRNA length (bp). mRNA smaller than
-                        "min_mRNA_length" will be skipped. default=100
-  -f OUTPUT_FORMAT, --format=OUTPUT_FORMAT
-                        Output file format, 'pdf', 'png' or 'jpeg'.
-                        default=pdf
-  -o OUTPUT_PREFIX, --out-prefix=OUTPUT_PREFIX
-                        Prefix of output files(s). [required]
+(Since v5.1.0 each of the 100 values is the mean coverage of a 1% slice of the
+mRNA, not the coverage of a single base at each percentile mark.)
+
+Options::
+
+  -i, --input INPUT_FILES
+                        A BAM file, comma-separated BAM files, a directory
+                        containing BAM files, or a text file listing BAM paths.
+  -r, --refgene REF_GENE_MODEL
+                        Reference gene model in BED12 format.
+  -o, --out-prefix OUTPUT_PREFIX
+                        Prefix for output files.
+  -l, --minimum-length INT
+                        Minimum mRNA (exonic) length in bp (>= 100). Default: 100
+  -q, --mapq INT        Minimum mapping quality of reads to count. Default: 30
+  --transcript-norm {mean,none}
+                        'mean': scale each transcript to its own mean before
+                        averaging. 'none': sum raw coverage (old behavior).
+                        Default: mean
+  --min-coverage FLOAT  Skip transcripts whose mean per-base coverage is below
+                        this. Default: 5 with 'mean', 0 with 'none'.
+  --length-bins EDGES   mRNA length bin edges in bp, e.g. '1000,2000,4000';
+                        'auto' uses quartiles of the BED file's transcript
+                        lengths; 'none' disables binning. Default: 1000,2000,4000
+  -p, --processes INT   Number of BAM files processed in parallel. Default: 1
+  --per-transcript      Also write each transcript's 100-slice profile.
+  -f, --format {pdf,png,jpeg}
+                        Plot output format. Default: pdf
+  --skip-plot           Generate data and R code but do not run R.
+  --rscript PATH        Rscript executable to use. Default: Rscript
+
+Output files (``PREFIX.geneBodyCoverage.*``):
+
+ * ``txt``: 100-slice profile per sample (same layout as earlier releases).
+ * ``byLength.txt``: profile per sample and length bin, with transcript counts.
+ * ``metrics.txt``: 3'/5' ratio and uniformity CV, overall and per length bin.
+ * ``curves.pdf``, ``heatMap.pdf``, ``byLength.pdf`` and the ``.r`` script.
+ * ``log.txt``: run log.
 
 Example:
 

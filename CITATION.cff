@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: >-
   If you use RSeQC in your research, please cite the following publications.
 title: RSeQC
-version: 5.0.5
-date-released: 2026-07-26
+version: 5.1.0
+date-released: 2026-11-08
 type: software
 
 authors:
