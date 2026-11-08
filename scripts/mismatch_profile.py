@@ -203,6 +203,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             q_cut=args.map_qual,
             outfile=str(args.output_prefix),
         )
+    except SAM.NoDataFound as exc:
+        print(f"{parser.prog}: {exc}", file=sys.stderr)
+        return 0
     except (OSError, ValueError, RuntimeError) as exc:
         parser.exit(1, f"{parser.prog}: error: {exc}\n")
 

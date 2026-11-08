@@ -6,9 +6,8 @@
 # -*- coding: utf-8 -*-
 '''manipulate BAM/SAM file.'''
 #import built-in modules
-import os,sys
+import sys
 import re
-import string
 import collections
 import random
 
@@ -16,12 +15,8 @@ import random
 from bx.bitset import *
 from bx.bitset_builders import *
 from bx.intervals import *
-from bx.binned_array import BinnedArray
-from bx_extras.fpconst import isNaN
 from bx.bitset_utils import *
 import pysam
-from qcmodule import mystat
-from qcmodule import fasta
 from qcmodule import bam_cigar
 from qcmodule import readfilter
 from qcmodule import sampling
@@ -30,6 +25,19 @@ from importlib.metadata import version
 
 __author__ = "Liguo Wang"
 __version__ = version("RSeQC")
+
+
+def r_string(text):
+    """Quote *text* as an R string literal (file paths may contain quotes)."""
+    return '"' + str(text).replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+class NoDataFound(Exception):
+    """The input has nothing to report (e.g. no paired reads, no junctions).
+
+    Command-line tools print the message and exit with status 0, as in
+    earlier releases.
+    """
 
 
 JUNCTION_CATEGORIES = ("annotated", "novel_combination", "partial_novel", "complete_novel")
@@ -118,18 +126,13 @@ class ParseBAM(object):
     multi_hit_tags=['H0','H1','H2','IH','NH']
     def __init__(self,inputFile):
         '''constructor. input could be bam or sam'''
-        try:
-            self.samfile = pysam.Samfile(inputFile,'rb')
-            if len(self.samfile.header) ==0:
-                print("BAM/SAM file has no header section. Exit!", file=sys.stderr)
-                sys.exit(1)
-            self.bam_format = True
-        except:
-            self.samfile = pysam.Samfile(inputFile,'r')
-            if len(self.samfile.header) ==0:
-                print("BAM/SAM file has no header section. Exit!", file=sys.stderr)
-                sys.exit(1)
-            self.bam_format = False
+        # pysam detects SAM/BAM/CRAM itself. Errors (missing file, not an
+        # alignment file) propagate with their real message instead of a
+        # second, misleading "could not open as SAM" error.
+        self.samfile = pysam.AlignmentFile(inputFile)
+        if len(self.samfile.header) == 0:
+            raise ValueError(f"alignment file has no header section: {inputFile}")
+        self.bam_format = self.samfile.is_bam or self.samfile.is_cram
 
     def stat (self,q_cut=30):
         '''Calculate mapping statistics'''
@@ -596,7 +599,7 @@ class ParseBAM(object):
             print("ym=max(A_count/total,C_count/total,G_count/total,T_count/total,N_count/total,X_count/total) + 0.05", file=RS)
             print("yn=min(A_count/total,C_count/total,G_count/total,T_count/total,N_count/total,X_count/total)", file=RS)
             
-            print('pdf(\"%s\")' % (outfile +".NVC_plot.pdf"), file=RS)
+            print("pdf(%s)" % r_string(outfile +".NVC_plot.pdf"), file=RS)
             print('plot(position,A_count/total,type="o",pch=20,ylim=c(yn,ym),col="dark green",xlab="Position of Read",ylab="Nucleotide Frequency")', file=RS)
             print('lines(position,T_count/total,type="o",pch=20,col="red")', file=RS)
             print('lines(position,G_count/total,type="o",pch=20,col="blue")', file=RS)
@@ -610,7 +613,7 @@ class ParseBAM(object):
             print("ym=max(A_count/total,C_count/total,G_count/total,T_count/total) + 0.05", file=RS)
             print("yn=min(A_count/total,C_count/total,G_count/total,T_count/total)", file=RS)
         
-            print('pdf(\"%s\")' % (outfile +".NVC_plot.pdf"), file=RS)
+            print("pdf(%s)" % r_string(outfile +".NVC_plot.pdf"), file=RS)
             print('plot(position,A_count/total,type="o",pch=20,ylim=c(yn,ym),col="dark green",xlab="Position of Read",ylab="Nucleotide Frequency")', file=RS)
             print('lines(position,T_count/total,type="o",pch=20,col="red")', file=RS)
             print('lines(position,G_count/total,type="o",pch=20,col="blue")', file=RS)
@@ -652,10 +655,7 @@ class ParseBAM(object):
                     q=ord(j)-33
                     if q > q_max: q_max = q
                     if q < q_min: q_min = q
-                    try:
-                        quality[i][q] += 1
-                    except:
-                        quality[i][q] = 1
+                    quality[i][q] = quality[i].get(q, 0) + 1
         except StopIteration:
             print("Done", file=sys.stderr)
         
@@ -674,7 +674,7 @@ class ParseBAM(object):
         
         
         #generate R script for boxplot
-        print("pdf(\'%s\')" % (outfile + ".qual.boxplot.pdf"), file=FO)
+        print("pdf(%s)" % r_string(outfile + ".qual.boxplot.pdf"), file=FO)
         for i in sorted(i_box):
             print('p'+str(i) + '<-' + i_box[i], file=FO)
         print('boxplot(' + ','.join(['p'+str(i) for i in i_box]) + ',xlab=\"Position of Read(5\'->3\')\",ylab=\"Phred Quality Score\",outline=F' + ')', file=FO)
@@ -683,7 +683,7 @@ class ParseBAM(object):
         
         #generate R script for heatmap
         print('\n', file=FO)
-        print("pdf(\'%s\')" % (outfile + ".qual.heatmap.pdf"), file=FO)
+        print("pdf(%s)" % r_string(outfile + ".qual.heatmap.pdf"), file=FO)
         print("qual=c(" + ','.join(q_list)  + ')', file=FO)
         print("mat=matrix(qual,ncol=%s,byrow=F)" % (read_len), file=FO)
         print('Lab.palette <- colorRampPalette(c("blue", "orange", "red3","red2","red1","red"), space = "rgb",interpolate=c(\'spline\'))', file=FO)
@@ -726,7 +726,7 @@ class ParseBAM(object):
             print(i + '\t' + str(gc_hist[i]), file=FO)
             
         print("writing R script ...", file=sys.stderr)
-        print("pdf(\"%s\")" % (outfile +  ".GC_plot.pdf"), file=RS)
+        print("pdf(%s)" % r_string(outfile +  ".GC_plot.pdf"), file=RS)
         print('gc=rep(c(' + ','.join([i for i in list(gc_hist.keys())]) + '),' + 'times=c(' + ','.join([str(i) for i in list(gc_hist.values())]) + '))', file=RS)
         print('hist(gc,probability=T,breaks=%d,xlab="GC content (%%)",ylab="Density of Reads",border="blue",main="")' % 100, file=RS)
         #print >>RS, "lines(density(gc),col='red')"
@@ -806,7 +806,7 @@ class ParseBAM(object):
         
         
         print("generate R script ...", file=sys.stderr)
-        print("pdf(\'%s\')" % (outfile +".DupRate_plot.pdf"), file=RS)
+        print("pdf(%s)" % r_string(outfile +".DupRate_plot.pdf"), file=RS)
         print("par(mar=c(5,4,4,5),las=0)", file=RS)
         print("seq_occ=c(" + ','.join([str(i) for i in sorted(seqDup_count.keys()) ]) + ')', file=RS)
         print("seq_uniqRead=c(" + ','.join([str(seqDup_count[i]) for i in sorted(seqDup_count.keys()) ]) + ')', file=RS)
@@ -897,7 +897,7 @@ class ParseBAM(object):
                 nonclip_count.append(nonclipped)
 
             print(
-                'pdf("%s")' % (outfile + ".clipping_profile.pdf"),
+                "pdf(%s)" % r_string(outfile + ".clipping_profile.pdf"),
                 file=ROUT,
             )
             print(
@@ -1011,7 +1011,7 @@ class ParseBAM(object):
                 r2_nonclip_count.append(nonclipped)
 
             print(
-                'pdf("%s")' % (outfile + ".clipping_profile.R1.pdf"),
+                "pdf(%s)" % r_string(outfile + ".clipping_profile.R1.pdf"),
                 file=ROUT,
             )
             print(
@@ -1040,7 +1040,7 @@ class ParseBAM(object):
             print("dev.off()", file=ROUT)
 
             print(
-                'pdf("%s")' % (outfile + ".clipping_profile.R2.pdf"),
+                "pdf(%s)" % r_string(outfile + ".clipping_profile.R2.pdf"),
                 file=ROUT,
             )
             print(
@@ -1120,7 +1120,7 @@ class ParseBAM(object):
                 clip_count.append(soft_clip_profile[i])
             
             
-            print("pdf(\"%s\")" % (outfile + '.insertion_profile.pdf'), file=ROUT)
+            print("pdf(%s)" % r_string(outfile + '.insertion_profile.pdf'), file=ROUT)
             print("read_pos=c(%s)" % ','.join([str(i) for i in read_pos]), file=ROUT)
             print("insert_count=c(%s)" % ','.join([str(i) for i in clip_count]), file=ROUT)
             print("noninsert_count= %d - insert_count" % (total_read), file=ROUT)
@@ -1182,14 +1182,14 @@ class ParseBAM(object):
                 r2_clip_count.append(r2_soft_clip_profile[i])
         
             
-            print("pdf(\"%s\")" % (outfile + '.insertion_profile.R1.pdf'), file=ROUT)
+            print("pdf(%s)" % r_string(outfile + '.insertion_profile.R1.pdf'), file=ROUT)
             print("read_pos=c(%s)" % ','.join([str(i) for i in read_pos]), file=ROUT)
             print("r1_insert_count=c(%s)" % ','.join([str(i) for i in r1_clip_count]), file=ROUT)
             print("r1_noninsert_count = %d - r1_insert_count" % (total_read1), file=ROUT)
             print('plot(read_pos, r1_insert_count*100/(r1_insert_count + r1_noninsert_count),col="blue",main="Insertion profile",xlab="Position of read (read-1)",ylab="Insertion %",type="b")', file=ROUT)
             print("dev.off()", file=ROUT)
 
-            print("pdf(\"%s\")" % (outfile + '.insertion_profile.R2.pdf'), file=ROUT)
+            print("pdf(%s)" % r_string(outfile + '.insertion_profile.R2.pdf'), file=ROUT)
             print("read_pos=c(%s)" % ','.join([str(i) for i in read_pos]), file=ROUT)
             print("r2_insert_count=c(%s)" % ','.join([str(i) for i in r2_clip_count]), file=ROUT)
             print("r2_noninsert_count = %d - r2_insert_count" % (total_read2), file=ROUT)
@@ -1299,8 +1299,7 @@ class ParseBAM(object):
 
         print("Total read pairs  used " + str(pair_num), file=sys.stderr)
         if pair_num==0:
-            print("Cannot find paired reads", file=sys.stderr)
-            sys.exit(0)
+            raise NoDataFound("Cannot find paired reads")
         below = sum(1 for d in distances if d <= low_bound)
         above = sum(1 for d in distances if d > up_bound)
         print(f"Pairs with inner distance <= {low_bound}: {below}; > {up_bound}: {above}. "
@@ -1314,8 +1313,8 @@ class ParseBAM(object):
             count = str(sum(1 for d in distances if st < d <= st + step))
             counts.append(count)
             print(str(st) + '\t' + str(st+step) +'\t' + count, file=FQ)
-        print("out_file = \'%s\'" % outfile, file=RS)
-        print("pdf(\'%s\')" % (outfile + ".inner_distance_plot.pdf"), file=RS)
+        print("out_file = %s" % r_string(outfile), file=RS)
+        print("pdf(%s)" % r_string(outfile + ".inner_distance_plot.pdf"), file=RS)
         #print >>RS, "par(mfrow=c(2,1),cex.main=0.8,cex.lab=0.8,cex.axis=0.8,mar=c(4,4,4,1))"
         #print >>RS, 'pie(c(%d,%d,%d),col=rainbow(3),cex=0.5,radius=1,main="Total %d fragments",labels=c("fraSize <= %d\\n(%4.2f%%)","fragSize > %d\\n(%4.2f%%)","%d < fragSize <= %d\\n(%4.2f%%)"), density=rep(80,80,80),angle=c(90,140,170))' % (ultra_low, ultra_high, pair_num -ultra_low -ultra_high, pair_num, low_bound, ultra_low*100/pair_num, up_bound, ultra_high*100/pair_num, low_bound, up_bound, 100-ultra_low*100/pair_num - ultra_high*100/pair_num)
         print('fragsize=rep(c(' + ','.join(sizes) + '),' + 'times=c(' + ','.join(counts) + '))', file=RS)
@@ -1351,8 +1350,7 @@ class ParseBAM(object):
         out_file = outfile + ".junction.xls"
         out_file2 = outfile + ".junction_plot.r"
         if refgene is None:
-            print("You must provide reference gene model in bed format.", file=sys.stderr)
-            sys.exit(1)
+            raise ValueError("You must provide reference gene model in bed format.")
 
         print("Reading reference bed file: ", refgene, " ... ", end=' ', file=sys.stderr)
         reference = load_reference_introns(refgene)
@@ -1382,8 +1380,7 @@ class ParseBAM(object):
 
         print("total = " + str(total_events))
         if total_events == 0:
-            print("No splice junction found.", file=sys.stderr)
-            sys.exit()
+            raise NoDataFound("No splice junction found.")
 
         junction_counts = dict.fromkeys(categories, 0)
         with open(out_file, 'w') as OUT:
@@ -1407,8 +1404,7 @@ class ParseBAM(object):
         print("Filtered Splicing Events:\t" + str(filtered_events), file=sys.stderr)
 
         if total_junctions == 0:
-            print("No splice read found", file=sys.stderr)
-            sys.exit(1)
+            raise ValueError("No splice junction passed the minimum intron size")
         print("\nTotal splicing  Junctions:\t" + str(total_junctions), file=sys.stderr)
         for label in categories:
             print(f"{names[label]} Splicing Junctions:\t{junction_counts[label]}", file=sys.stderr)
@@ -1424,7 +1420,7 @@ class ParseBAM(object):
                 labels = ",".join(
                     '"%s %d%%"' % (label, round(v)) for label, v in zip(categories, values)
                 )
-                print('pdf("%s")' % (outfile + pdf), file=ROUT)
+                print("pdf(%s)" % r_string(outfile + pdf), file=ROUT)
                 print("x=c(" + ','.join(str(v) for v in values) + ')', file=ROUT)
                 print('pie(x,col=c(4,6,2,3),init.angle=30,main="%s",labels=c(%s))' % (title, labels), file=ROUT)
                 print("dev.off()", file=ROUT)
@@ -1440,8 +1436,7 @@ class ParseBAM(object):
         
         out_file = outfile + ".junctionSaturation_plot.r"
         if refgene is None:
-            print("You must provide reference gene model in bed format.", file=sys.stderr)
-            sys.exit(1)
+            raise ValueError("You must provide reference gene model in bed format.")
         
         OUT = open(out_file,'w')
 
@@ -1485,10 +1480,9 @@ class ParseBAM(object):
         try:
             while(1):
                 aligned_read = next(self.samfile)
-                try:
-                    chrom = self.samfile.getrname(aligned_read.tid).upper()
-                except:
-                    continue
+                if aligned_read.reference_id < 0:
+                    continue                                    #no reference (unmapped)
+                chrom = aligned_read.reference_name.upper()
                 if chrom not in chrom_list:
                     continue                
                 if not readfilter.passes(aligned_read):continue   #skip unmapped, secondary, supplementary, QC-failed and duplicate records
@@ -1541,7 +1535,7 @@ class ParseBAM(object):
 
         #for j in uniq_SJ:
             #print >>OUT, j + "\t" + str(uniq_SJ[j])
-        print("pdf(\'%s\')" % (outfile + '.junctionSaturation_plot.pdf'), file=OUT)
+        print("pdf(%s)" % r_string(outfile + '.junctionSaturation_plot.pdf'), file=OUT)
         print("x=c(" + ','.join([str(i) for i in tmp]) + ')', file=OUT)
         print("y=c(" + ','.join(known_junc) + ')', file=OUT)
         print("z=c(" + ','.join(all_junc) + ')', file=OUT)
@@ -1558,8 +1552,7 @@ class ParseBAM(object):
         '''for each gene, check if its RPKM (epxresion level) has already been saturated or not'''
         
         if refbed is None:
-            print("You must specify a bed file representing gene model\n", file=sys.stderr)
-            exit(0)
+            raise ValueError("You must specify a bed file representing gene model")
         rpkm_file = outfile + ".eRPKM.xls"
         raw_file = outfile + ".rawCount.xls"
         
@@ -1686,7 +1679,7 @@ class ParseBAM(object):
                     exon_ends = list(map((lambda x, y: x + y ), exon_starts, exon_ends))
                     exon_sizes = list(map(int,fields[10].rstrip(',\n').split(',')))
                     key='\t'.join((fields[0],str(tx_start),str(tx_end),geneName,'0',strand))   # chromosome name as in the BED file
-                except:
+                except (IndexError, ValueError):
                     print("[NOTE:input bed must be 12-column] skipped this line: " + line, file=sys.stderr)
                     continue
                 mRNA_count=0    #we need to initializ it to 0 for each gene
@@ -1700,11 +1693,9 @@ class ParseBAM(object):
                         if chrom in ranges:
                             mRNA_count += len(ranges[chrom].find(st,end))
                 if mRNA_len ==0:
-                    print(geneName + " has 0 nucleotides. Exit!", file=sys.stderr)
-                    sys.exit(1)
+                    raise ValueError(geneName + " has 0 nucleotides")
                 if sample_size == 0:
-                    print("Too few reads to sample. Exit!", file=sys.stderr)
-                    sys.exit(1)
+                    raise ValueError("Too few reads to sample")
                 mRNA_RPKM = (mRNA_count * 1000000000.0)/(mRNA_len * sample_size)
                 RPKM_table[key].append(str(mRNA_RPKM))
                 rawCount_table[key].append(str(mRNA_count))
@@ -1811,8 +1802,7 @@ class ParseBAM(object):
         print('\n')
         
         if len(data) == 0:
-            print("No mismatches found", file=sys.stderr)
-            sys.exit()
+            raise NoDataFound("No mismatches found")
         # write data out
         all_genotypes = ['A2C','A2G','A2T','C2A','C2G','C2T','G2A','G2C','G2T','T2A','T2C','T2G']
         print("read_pos\tsum\t" + '\t'.join(all_genotypes), file=DOUT)
@@ -1844,7 +1834,7 @@ class ParseBAM(object):
         print('y_up_bound = max(c(%s))' % (','.join(["log10(" + str(i) + "+1)" for i in all_genotypes])), file=ROUT)
         print('y_low_bound = min(c(%s))' % (','.join(["log10(" + str(i) + "+1)" for i in all_genotypes])), file=ROUT)
         
-        print("pdf(\"%s\")" % (outfile + '.mismatch_profile.pdf'), file=ROUT)
+        print("pdf(%s)" % r_string(outfile + '.mismatch_profile.pdf'), file=ROUT)
         count=1
         for gt in all_genotypes:
             if count == 1:
@@ -1929,7 +1919,7 @@ class ParseBAM(object):
                 del_count.append('0')
         DOUT.close()
         
-        print("pdf(\"%s\")" % (outfile + '.deletion_profile.pdf'), file=ROUT)
+        print("pdf(%s)" % r_string(outfile + '.deletion_profile.pdf'), file=ROUT)
         print("pos=c(%s)" % ','.join([str(i) for i in range(0,read_length)]), file=ROUT)
         print("value=c(%s)" % ','.join([i for i in del_count]), file=ROUT)      
         print("plot(pos,value,type='b', col='blue',xlab=\"Read position (5\'->3\')\", ylab='Deletion count')", file=ROUT)                   

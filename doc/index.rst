@@ -85,6 +85,61 @@ Release history
   longer writes secondary or supplementary records as extra FASTQ entries.
   The rules are shared by all tools (``qcmodule.readfilter``).
 
+* Tool-specific fixes (results change):
+
+  * ``junction_annotation.py``: a junction is ``annotated`` only if the exact
+    intron is in the gene model. Junctions joining two annotated splice
+    sites that the gene model never pairs (e.g. exon skipping) were reported
+    as annotated; they are now a fourth class, ``novel_combination``.
+    Chromosome names are written as in the BAM header (``chrUn_KI270302v1``
+    was written as ``chrUN_KI270302V1``).
+  * ``infer_experiment.py`` and ``inner_distance.py``: reads are sampled
+    from genes across the genome in random order (at most 1,000 per gene;
+    new ``--seed``, default 0), not from the start of the BAM file, which
+    on a sorted BAM meant the first few genes of chr1. BAM files without an
+    index are still read from the start, with a warning.
+    ``infer_experiment.py`` also matches spliced reads to genes by their
+    full alignment span, and a few unpaired reads in paired data no longer
+    make the result "Mixture".
+  * ``inner_distance.py``: the first transcript on each chromosome was never
+    loaded; the read end now includes deletions; the mRNA distance counts
+    exons of the transcript both reads share, not every annotated exon.
+    Pairs outside ``-l``/``-u`` are reported; they are not in the mean/SD.
+  * ``read_distribution.py``: exons of non-coding transcripts (thickStart ==
+    thickEnd) have their own ``Noncoding_Exons`` row; they were counted as
+    5' or 3' UTR. New ``-q/--mapq`` (default 30). BED files with a ``track``
+    line no longer crash it (or ``inner_distance.py``).
+  * ``tin.py``: new ``-q/--mapq`` (default 30); pysam's pileup limits (8,000
+    reads per base, base quality >= 13) no longer apply; duplicates are
+    excluded consistently; transcripts with too few reads are ``NA``
+    instead of 0 and are still left out of the summary.
+  * ``read_NVC.py`` / ``read_quality.py``: positions run to the longest read
+    (the last read's length was used, losing positions with trimmed reads).
+  * ``junction_saturation.py`` / ``RPKM_saturation.py``: no reads are skipped
+    with non-default ``-l``/``-u``/``-s``; new ``--seed`` (default 0) makes
+    runs reproducible. ``junction_saturation.py`` applies ``-v`` to all,
+    known and novel junctions. ``RPKM_saturation.py`` keeps BED chromosome
+    names instead of lower-casing them.
+  * ``bam2wig.py``: much lower memory use; the ``-t/--wigsum`` total uses the
+    same MAPQ filter as the signal (it used the NH tag); reads not covered
+    by a strand rule are skipped instead of crashing.
+  * ``FPKM_count.py``: spliced single-end reads are matched to exons by their
+    aligned blocks; pairs whose read 1 lies outside the transcript are
+    counted (through read 2) instead of lost.
+  * ``read_duplication.py``: positional duplicates of paired reads must also
+    share the mate position. In RNA-seq, highly expressed genes produce
+    reads at the same position without PCR; read the duplication rate with
+    that in mind.
+
+* Removed unused library code (about 6,500 lines): the ``ParseSAM`` and
+  ``QCSAM`` classes, unused ``ParseBAM``/``ParseBED`` methods, ``CompareBED``,
+  and the ``annoGene``, ``changePoint``, ``cigar``, ``dotProduct``, ``fasta``,
+  ``mystat``, ``orf``, ``quantile`` and ``wiggle`` modules. Code that imported
+  these from ``qcmodule`` directly must be updated.
+
+* Library code raises exceptions instead of calling ``sys.exit``; errors
+  opening alignment files report the real cause.
+
 * Added unit and end-to-end tests (``tests/``), run in CI.
 
 **RSeQC v5.0.6**
@@ -1136,12 +1191,14 @@ annotation is performed in two levels: splice event level and splice junction le
 * splice read: An RNA read, especially long read, can be spliced more than once, therefore, 100 spliced reads can produce >= 100 splicing events.
 * splice junction: multiple splicing events spanning the same intron can be consolidated into one splicing junction.
 
-Detected junctions were divided to 3 exclusive categories:
+Detected junctions are divided into 4 exclusive categories:
 
-1. Annotated (known): The junction is part of the gene model. Both splice sites, 5' splice site
-   (5'SS) and 3'splice site (3'SS) are annotated by reference gene model.
-2. Complete_novel: Both 5'SS and 3'SS are novel.
-3. Partial_novel: One of the splice site (5'SS or 3'SS) is novel, and the other splice site is annotated
+1. Annotated (known): The junction (intron) is part of the gene model.
+2. Novel_combination: Both splice sites, 5' splice site (5'SS) and 3' splice
+   site (3'SS), are annotated, but the gene model never joins them (e.g. exon
+   skipping). Before v5.1.0 these were reported as annotated.
+3. Partial_novel: One of the splice sites (5'SS or 3'SS) is novel, and the other is annotated.
+4. Complete_novel: Both 5'SS and 3'SS are novel.
 
 Options:
   --version             show program's version number and exit
@@ -1369,10 +1426,11 @@ Provided a BAM/SAM file and reference gene model, this module will calculate how
 reads were distributed over genome feature (like CDS exon, 5'UTR exon, 3' UTR exon, Intron,
 Intergenic regions). When genome features are overlapped (e.g. a region could be annotated
 as both exon and intron by two different transcripts) , they are prioritize as:
-CDS exons > UTR exons > Introns > Intergenic regions, for example, if a read was mapped to
+CDS exons > UTR exons > Noncoding exons > Introns > Intergenic regions, for example, if a read was mapped to
 both CDS exon and intron, it will be assigned to CDS exons.
 
-* "Total Reads": This does NOT include those QC fail,duplicate and non-primary hit reads
+* "Noncoding_Exons" (since v5.1.0): exons of non-coding transcripts (BED thickStart == thickEnd). Earlier releases counted them as 5' or 3' UTR.
+* "Total Reads": This does NOT include unmapped, QC-failed, duplicate, secondary, supplementary or low-MAPQ (below ``-q``, default 30) reads
 * "Total Tags": reads spliced once will be counted as 2 tags, reads spliced twice will be counted as 3 tags, etc. And because of this, "Total Tags" >= "Total Reads"
 * "Total Assigned Tags": number of tags that can be unambiguously assigned the 10 groups (see below table).
 * Tags assigned to "TSS_up_1kb" were also assigned to "TSS_up_5kb" and "TSS_up_10kb", tags assigned to "TSS_up_5kb" were also assigned to "TSS_up_10kb". Therefore, "Total Assigned Tags" = CDS_Exons + 5'UTR_Exons + 3'UTR_Exons + Introns + TSS_up_10kb + TES_down_10kb.
@@ -1391,6 +1449,7 @@ Options:
                         Alignment file in BAM or SAM format.
   -r REF_GENE_MODEL, --refgene=REF_GENE_MODEL
                         Reference gene model in bed format.
+  -q INT, --mapq INT    Minimum mapping quality of reads to count. Default: 30
 
 Example::
 
@@ -2171,7 +2230,11 @@ Options:
                         12-column BED file. [required]
   -c MINIMUM_COVERAGE, --minCov=MINIMUM_COVERAGE
                         Minimum number of read mapped to a transcript.
-                        default=10
+                        default=10. Transcripts below this get TIN "NA"
+                        (0 before v5.1.0) and are left out of the summary.
+  -q INT, --mapq INT    Minimum mapping quality of reads to count (since
+                        v5.1.0; earlier releases counted multi-mapped reads).
+                        Default: 30
   -n SAMPLE_SIZE, --sample-size=SAMPLE_SIZE
                         Number of equal-spaced nucleotide positions picked
                         from mRNA. Note: if this number is larger than the

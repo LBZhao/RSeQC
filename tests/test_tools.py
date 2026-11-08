@@ -452,3 +452,15 @@ def test_positional_duplication_uses_mate_position(tmp_path, bam_builder):
     occurrence = {int(r[0]): int(r[1]) for r in table(f"{prefix}.pos.DupRate.xls")[1:]}
     # Reads seen once: both 1000-pairs (4 reads); seen twice: the 2000 pairs.
     assert occurrence == {1: 4, 2: 2}
+
+
+def test_no_data_cases_exit_zero_with_message(tmp_path, bam_builder):
+    bed = write_bed(tmp_path, [bed12_line("g", "+", GENE)])
+    builder = bam_builder()
+    builder.add(1100, "50M")                     # single-end, unspliced
+    bam = builder.write()
+    result = run_script("inner_distance.py", "-i", bam, "-r", bed, "-o", tmp_path / "id", "--skip-plot")
+    assert "Cannot find paired reads" in result.stderr
+    result = run_script("junction_annotation.py", "-i", bam, "-r", bed, "-o", tmp_path / "j",
+                        "--skip-plot", "--skip-bed", "--skip-interact")
+    assert "No splice junction found" in result.stderr
