@@ -15,7 +15,11 @@ from qcmodule import ireader
 
 
 def fasta_iter(infile):
-    """Yield sequence lines from a FASTA file.
+    """Yield the sequences of a FASTA file, one per record.
+
+    Sequences wrapped over several lines are joined. (Before RSeQC 5.1.0
+    each line was yielded separately, so wrapped sequences were counted as
+    several short reads.)
 
     Parameters
     ----------
@@ -28,11 +32,19 @@ def fasta_iter(infile):
         Sequence lines.
     """
     logging.info('Reading FASTA file "%s" ...', infile)
+    parts = []
     for line in ireader.reader(infile):
         line = line.strip()
-        if not line or line.startswith(">"):
+        if not line:
             continue
-        yield line
+        if line.startswith(">"):
+            if parts:
+                yield "".join(parts)
+            parts = []
+        else:
+            parts.append(line)
+    if parts:
+        yield "".join(parts)
 
 
 def fastq_iter(infile, mode="seq"):

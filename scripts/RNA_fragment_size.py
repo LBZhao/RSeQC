@@ -238,8 +238,11 @@ def parse_bed12_record(
         for exon_start, block_size in zip(exon_starts, block_sizes)
     ]
 
+    # BED [start, end) is 1-based inclusive [start + 1, end]. (Before RSeQC
+    # 5.1.0 this was [start + 1, end + 1], adding 1 bp per exon end that a
+    # fragment crossed.)
     exon_ranges = [
-        [start + 1, end + 1]
+        [start + 1, end]
         for start, end in zip(exon_starts, exon_ends)
     ]
 

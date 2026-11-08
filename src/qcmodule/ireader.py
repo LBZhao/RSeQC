@@ -6,7 +6,7 @@ read compressed (.gz .bz) files
 import sys
 import bz2
 import gzip
-import urllib
+import urllib.request
 from subprocess import Popen
 from subprocess import PIPE
 
@@ -17,10 +17,10 @@ def nopen(f, mode="rb"):
 		p = Popen(f[1:], stdout=PIPE, stdin=PIPE, shell=True)
 		if mode[0] == "r": return p.stdout
 		return p
-	return {"r": sys.stdin, "w": sys.stdout}[mode[0]] if f == "-" \
+	return {"r": sys.stdin.buffer, "w": sys.stdout.buffer}[mode[0]] if f == "-" \
 		else gzip.open(f, mode) if f.endswith((".gz", ".Z", ".z")) \
 		else bz2.BZ2File(f, mode) if f.endswith((".bz", ".bz2", ".bzip2")) \
-		else urllib.urlopen(f) if f.startswith(("http://", "https://","ftp://")) \
+		else urllib.request.urlopen(f) if f.startswith(("http://", "https://","ftp://")) \
 		else open(f, mode)
 
  

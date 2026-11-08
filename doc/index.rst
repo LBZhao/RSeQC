@@ -135,6 +135,36 @@ with ``pip install git+https://github.com/LBZhao/RSeQC.git``.
     reads at the same position without PCR; read the duplication rate with
     that in mind.
 
+* More tool fixes (results change):
+
+  * ``RNA_fragment_size.py``: fragments were 1 bp too long for every exon
+    end they crossed.
+  * ``read_hexamer.py``: FASTQ quality lines made only of A/C/G/T/N
+    characters (valid quality codes) were counted as sequence, and quality
+    lines starting with ``@`` started a new record. FASTA lines with IUPAC
+    codes were dropped, joining their neighbours into false hexamers; such
+    bases now count as N.
+  * ``split_bam.py``: a mate on another chromosome was looked up on the
+    read's own chromosome.
+  * ``split_paired_bam.py``: supplementary records kept their flag (it was
+    dropped, so they looked like extra primary reads).
+  * ``divide_bam.py``: reads are assigned by a seeded hash of their name,
+    so memory no longer grows with the number of reads. The same
+    ``--seed`` gives a different split than before.
+  * ``overlay_bigwig.py -a Division``: positions where both inputs are 0
+    are no longer written as 1.00 in some places and left out in others.
+  * ``FPKM-UQ.py``: stops with an error when the 75th percentile count is
+    0 (every FPKM-UQ value used to be ``inf``).
+  * ``sc_editMatrix.py``: barcodes with any GEM-well suffix (``-2``,
+    ``-3`` ... from Cell Ranger aggr) are handled; only ``-1`` was, so
+    every barcode of other wells counted as edited. Secondary and
+    supplementary records are no longer counted as extra reads.
+  * ``sc_bamStat.py``: no longer writes and deletes temporary
+    ``*.all_reads_id.txt`` files in the working directory (two runs in one
+    directory corrupted each other).
+  * ``sc_seqLogo.py``: wrapped FASTA sequences are read as one sequence
+    instead of one per line. Reading from ``-`` (stdin) and from URLs works.
+
 * Removed unused library code (about 6,500 lines): the ``ParseSAM`` and
   ``QCSAM`` classes, unused ``ParseBAM``/``ParseBED`` methods, ``CompareBED``,
   and the ``annoGene``, ``changePoint``, ``cigar``, ``dotProduct``, ``fasta``,

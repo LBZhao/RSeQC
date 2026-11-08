@@ -199,6 +199,11 @@ def single_end_flag(alignment: pysam.AlignedSegment) -> int:
     if alignment.is_duplicate:
         flag |= 0x0400
 
+    # Keep supplementary (chimeric) records marked as such; otherwise they
+    # look like extra primary reads and are counted twice downstream.
+    if alignment.is_supplementary:
+        flag |= 0x0800
+
     return flag
 
 

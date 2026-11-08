@@ -12,7 +12,6 @@ import pysam
 import sys
 import collections
 import logging
-from pathlib import Path
 
 
 def _percent(count, total):
@@ -20,6 +19,18 @@ def _percent(count, total):
     return 0.0 if total == 0 else count * 100.0 / total
 import re
 import pandas as pd
+
+_GEM_SUFFIX = re.compile(r"-\d+$")
+
+
+def strip_suffix(barcode):
+    """Remove the Cell Ranger GEM-well suffix (``-1``, ``-2``, ...).
+
+    Before RSeQC 5.1.0 only ``-1`` was removed, so in aggregated BAM files
+    (``-2``, ``-3``, ...) every barcode was counted as edited.
+    """
+    return _GEM_SUFFIX.sub("", barcode)
+
 
 def diff_str(s1, s2):
     '''
@@ -107,14 +118,16 @@ def barcode_edits(infile, outfile, step_size=10000, limit=2000000, CR_tag = 'CR'
     try:
         while True:
             aligned_read = next(samfile)
+            if aligned_read.is_secondary or aligned_read.is_supplementary:
+                continue    # count each read once
             total_alignments += 1
             tag_dict = dict(aligned_read.tags) #{'NM': 1, 'RG': 'L1'}
 
             original_CB = ''
             corrected_CB = ''
             if CR_tag in tag_dict and CB_tag in tag_dict:
-                original_CB = tag_dict[CR_tag].replace('-1','')
-                corrected_CB = tag_dict[CB_tag].replace('-1','')
+                original_CB = strip_suffix(tag_dict[CR_tag])
+                corrected_CB = strip_suffix(tag_dict[CB_tag])
                 CB_freq[corrected_CB] +=1
                 if original_CB != corrected_CB:
                     CB_diff += 1
@@ -128,8 +141,8 @@ def barcode_edits(infile, outfile, step_size=10000, limit=2000000, CR_tag = 'CR'
             original_UMI = ''
             corrected_UMI = ''
             if UR_tag in tag_dict and UB_tag in tag_dict:
-                original_UMI = tag_dict[UR_tag].replace('-1','')
-                corrected_UMI = tag_dict[UB_tag].replace('-1','')
+                original_UMI = strip_suffix(tag_dict[UR_tag])
+                corrected_UMI = strip_suffix(tag_dict[UB_tag])
                 UMI_freq[corrected_UMI] += 1
                 if original_UMI != corrected_UMI:
                     UMI_diff += 1
@@ -253,15 +266,19 @@ def mapping_stat(infile,  step_size=50000, CB_tag = 'CB', UMI_tag = 'UB',RE_tag 
     chrM_reads = 0
     #read match type
     read_type = collections.defaultdict(int)
+    # Read names are collected in memory. (Before RSeQC 5.1.0 they went to
+    # per-chromosome temporary files in the working directory, and every
+    # matching *.all_reads_id.txt file there was then read and deleted, so
+    # two runs in one directory corrupted each other.)
+    all_read_ids = set()
+    confident_read_ids = set()
 
     for chr_id, chr_len in chrom_info:
         logging.info("Processing \"%s\" ..." % chr_id)
         chrom_count = 0
-        chrom_total_reads = set() #total reads in BAM file
-        chrom_confi_reads = set() #reads marked as confidently mapped to transcriptome by xf:i:1 tag
+        chrom_total_reads = all_read_ids          # total reads in BAM file
+        chrom_confi_reads = confident_read_ids    # confidently mapped (xf:i:1)
 
-        ALL = open(chr_id + '.all_reads_id.txt','w')
-        CONF = open(chr_id + '.confident_reads_id.txt','w')
         for aligned_read in samfile.fetch(chr_id):
             total_alignments += 1
             chrom_count += 1
@@ -325,37 +342,16 @@ def mapping_stat(infile,  step_size=50000, CB_tag = 'CB', UMI_tag = 'UB',RE_tag 
             if chrom_count % step_size == 0:
                 print("%d alignments processed.\r" % chrom_count, end=' ', file=sys.stderr)
         logging.info("Processed %d alignments from \"%s\"" % (chrom_count, chr_id))
-        for i in chrom_total_reads:
-            print (i, file=ALL)
-        for i in chrom_confi_reads:
-            print (i, file=CONF)
-        ALL.close()
-        CONF.close()
 
     logging.info("Processing total %d alignments mapped to all chromosomes." % total_alignments)
 
     logging.info("Count total mapped reads ...")
-    all_read_ids = set()
-    confident_read_ids = set()
-    for path in Path(".").glob("*.all_reads_id.txt"):
-        with path.open() as handle:
-            all_read_ids.update(line.rstrip("\n") for line in handle if line.strip())
-    for path in Path(".").glob("*.confident_reads_id.txt"):
-        with path.open() as handle:
-            confident_read_ids.update(line.rstrip("\n") for line in handle if line.strip())
-
     with open("All_reads_uniqID.txt", "w") as handle:
         for read_id in sorted(all_read_ids):
             print(read_id, file=handle)
     with open("confident_reads_uniqID.txt", "w") as handle:
         for read_id in sorted(confident_read_ids):
             print(read_id, file=handle)
-
-    logging.info("Removing intermediate files ...")
-    for path in Path(".").glob("*.all_reads_id.txt"):
-        path.unlink()
-    for path in Path(".").glob("*.confident_reads_id.txt"):
-        path.unlink()
 
     total_reads_n = len(all_read_ids)
     confi_reads_n = len(confident_read_ids)
@@ -409,228 +405,3 @@ def mapping_stat(infile,  step_size=50000, CB_tag = 'CB', UMI_tag = 'UB',RE_tag 
 
 
 
-def readCount(infile, outfile, step_size=10000, limit=1000000, csv_out=False):
-    '''
-    Save reads that confidenlty mapped to transcriptome to a BAM file.
-
-    Parameters
-    ----------
-    infile : str
-        Input BAM file. Must be sorted and indexed.
-    outfile : str
-        Prefix of output files.
-    step_size: int
-        Output progress report when step_size alignments have been processed.
-    limit : int
-        Only process this number of alignments and stop.
-    '''
-    logging.info("Reading BAM file \"%s\" ..." % infile)
-    samfile = pysam.AlignmentFile(infile, 'rb')
-
-    #OUT = open(outfile,'w')
-    total_alignments = 0
-    CB_GN_READ = collections.defaultdict(dict)
-    #CB_GN_UMI = collections.defaultdict(list)
-    try:
-        while(1):
-            aligned_read = next(samfile)
-            read_id = aligned_read.query_name
-            tag_dict = dict(aligned_read.tags) #{'NM': 1, 'RG': 'L1'}
-            if 'xf' in tag_dict and tag_dict['xf']& 0x1 == 0:
-                continue
-            if 'CB' in tag_dict:
-                CB = tag_dict['CB'].replace('-1', '')
-            else:
-                logging.debug('%s has no cell barcode!', read_id)
-                continue
-            #if 'UB' in tag_dict:
-            #   UMI = tag_dict['UB'].replace('-1','')
-            if 'GX' in tag_dict:
-                geneID = tag_dict['GX']
-            else:
-                geneID = 'NA'
-            if 'GN' in tag_dict:
-                geneSymbol = tag_dict['GN']
-            else:
-                geneSymbol="NA"
-
-            if geneID == 'NA':
-                continue
-
-            try:
-                CB_GN_READ[CB][geneID + '|' + geneSymbol] += 1
-            except KeyError:
-                CB_GN_READ[CB][geneID + '|' + geneSymbol] = 1
-
-            #CB_GN_UMI[CB + ':' + geneID].append(UMI)
-
-            total_alignments += 1
-            if total_alignments % step_size == 0:
-                print("%d alignments processed.\r" % total_alignments, end=' ', file=sys.stderr)
-            if limit is not None:
-                if total_alignments >= limit:
-                    break
-
-    except StopIteration:
-        pass
-    """
-    logging.info('Total %d alignments processed' % total_alignments)
-    logging.info('Convert dict of dict to pandas data frame')
-    count_mat = pd.DataFrame(CB_GN_READ)
-    (gene_num, CB_num) = count_mat.shape
-    logging.info('Data frame contains %d genes (rows) and %d cell barcodes (columns)' % (gene_num, CB_num))
-
-    if csv_out is True:
-        logging.info('Save data frame to \"%s\"' % (outfile + '.csv'))
-        count_mat.to_csv(outfile + '.csv', index=True, index_label="Gene")
-
-
-    logging.info('Save data frame to \"%s\"' % (outfile + '.h5'))
-    count_mat.to_hdf(outfile + '.h5',key='df',mode='w',complevel=6)
-    """
-
-
-def CBC_UMIcount(infile, outfile, step_size=50000, CB_tag = 'CB', UMI_tag = 'UB', gene_tag = 'GN', CB_num = 100000, read_num=200, UMI_num = 200, gene_num = 200):
-    '''
-    Calculate UMI count for each cell barcode.
-
-    Parameters
-    ----------
-    infile : str
-        Input BAM file. Must be sorted and indexed.
-    outfile : str
-        Prefix of output files.
-    step_size: int
-        Print progress report when step_size alignments have been processed.
-    CB_tag : str
-        Tag for cell barcode in the input BAM file.
-    UMI_tag : str
-        Tag for UMI in the input BAM file.
-    CB_num : int
-        Number of cell barcodes to be considered.
-    read_num : int
-        Read number threshold to filter invalid cell barcode.
-        Cell barcode with reads less than this value will be skipped.
-    '''
-
-
-    CB_read_freq = collections.defaultdict(int) # cell_barcode:read_frequency
-    CB_UMI_freq = {} # cell_barcode:UMI
-    CB_gene_freq = {} # cell_barcode:gene
-    CB_cutoff = CB_num
-    logging.info("Top %d cell barcodes (ranked by associated UMI frequency) will be analyzed." % CB_cutoff)
-    read_cutoff = read_num
-    logging.info("Only count UMIs for cell barcodes with more than %d reads." % read_cutoff)
-
-    #count read number for each cell barcode
-    logging.info("Reading BAM file \"%s\". Count reads for each cell barcode ..." % infile)
-    samfile = pysam.AlignmentFile(infile, 'rb')
-    total_alignments = 0
-    try:
-        while(1):
-            aligned_read = next(samfile)
-            tag_dict = dict(aligned_read.tags) #{'NM': 1, 'RG': 'L1'}
-            if 'xf' in tag_dict and tag_dict['xf']& 0x1 == 0:
-                continue
-
-            #count reads
-            if CB_tag in tag_dict:
-                CB = tag_dict[CB_tag].replace('-1','')
-            else:
-                continue
-            CB_read_freq[CB] += 1
-            total_alignments += 1
-            if total_alignments % step_size == 0:
-                print("%d alignments processed.\r" % total_alignments, end=' ', file=sys.stderr)
-    except StopIteration:
-        pass
-    logging.info('Total %d alignments processed' % total_alignments)
-
-    logging.info("Filtering cell barcodes ...")
-    CB_usable = set()
-    for k,v in CB_read_freq.items():
-        if v >= read_cutoff:
-            CB_usable.add(k)
-    logging.info("Total cell barcode: %d" % len(CB_read_freq))
-    logging.info("Cell barcode with more than %d reads: %d" % (read_cutoff, len(CB_usable)))
-
-
-    #count UMI for each cell barcode
-    logging.info("Reading BAM file \"%s\". Count UMIs for each cell barcode ..." % infile)
-    samfile = pysam.AlignmentFile(infile, 'rb')
-    CB_freq_list = {} #UMI count for each barcode
-    gene_freq = {} # gene count for each barcode
-    total_alignments = 0
-    try:
-        while(1):
-            aligned_read = next(samfile)
-            read_id = aligned_read.query_name
-            #chrom = samfile.get_reference_name(aligned_read.reference_id)
-            #if aligned_read.is_duplicate:continue
-            tag_dict = dict(aligned_read.tags) #{'NM': 1, 'RG': 'L1'}
-            if 'xf' in tag_dict and tag_dict['xf']& 0x1 == 0:
-                continue
-
-            if CB_tag in tag_dict:
-                CB = tag_dict[CB_tag].replace('-1','')
-                if CB not in CB_usable: #filter out CB with low number of reads
-                    continue
-            else:
-                logging.debug('%s has no cell barcode!' % read_id)
-                continue
-
-            # count UMI frequency
-            if UMI_tag in tag_dict:
-                UMI = tag_dict[UMI_tag].replace('-1','')
-                if  CB not in CB_freq_list:
-                    CB_freq_list[CB] = {UMI}
-                else:
-                    CB_freq_list[CB].add(UMI)
-            else:
-                logging.debug('%s has no UMI!' % read_id)
-                continue
-
-            # count gene frequency
-            if gene_tag in tag_dict:
-                gene_names = tag_dict[gene_tag].split(';')
-                if CB not in gene_freq:
-                    gene_freq[CB] = set()
-                for gene_name in gene_names:
-                    gene_freq[CB].add(gene_name)
-            else:
-                continue
-
-            total_alignments += 1
-            if total_alignments % step_size == 0:
-                print("%d alignments processed.\r" % total_alignments, end=' ', file=sys.stderr)
-    except StopIteration:
-        pass
-    logging.info('Total %d alignments processed' % total_alignments)
-
-    for k,v in CB_freq_list.items():
-        temp = len(v)
-        CB_UMI_freq[k] = temp
-
-    for k,v in gene_freq.items():
-        temp = len(v)
-        CB_gene_freq[k] = temp
-
-    OUT = open(outfile + '.Read_UMI_freq.tsv','w')
-    logging.info ("Writing cell barcodes' reads and UMI frequencies to \"%s\"" % (outfile + '.Read_UMI_freq.tsv'))
-    print ('\t'.join(['Serial','Cell_barcode', 'Read_count', 'UMI_count', 'Gene_count']), file=OUT) #do NOT change the header
-    count = 0
-    for k in sorted(CB_UMI_freq, key=CB_UMI_freq.get, reverse=True):
-        count += 1
-        if CB_UMI_freq[k] < UMI_num:
-            continue
-        if k in CB_gene_freq:
-            if CB_gene_freq[k] < gene_num:
-                continue
-            else:
-                print ('\t'.join([str(count), k, str(CB_read_freq[k]), str(CB_UMI_freq[k]), str(CB_gene_freq[k])]), file=OUT)
-        else:
-            continue
-        if count > CB_cutoff:
-            break
-    OUT.close()
-    logging.info ("Done.")

@@ -12,6 +12,7 @@ so paired mates remain together. Output files are named
 
 from __future__ import annotations
 import argparse
+import hashlib
 import random
 import sys
 from contextlib import ExitStack
@@ -129,11 +130,14 @@ def divide_bam(
     per_file_counts
         Number of alignments written to each output file.
     """
-    rng = random.Random(seed)
+    # Each read name is assigned by hashing it with the seed: mates and
+    # secondary/supplementary records of a read land in the same file
+    # without keeping every read name in memory (several GB for a typical
+    # BAM file before RSeQC 5.1.0).
+    salt = str(random.Random(seed).getrandbits(64)).encode()
     per_file_counts = [0] * len(paths)
     retained_count = 0
     skipped_count = 0
-    query_assignments: dict[str, int] = {}
 
     with pysam.AlignmentFile(str(input_file), "rb") as source:
         with ExitStack() as stack:
@@ -161,10 +165,10 @@ def divide_bam(
                         "encountered an alignment without a query name"
                     )
 
-                output_index = query_assignments.get(query_name)
-                if output_index is None:
-                    output_index = rng.randrange(len(outputs))
-                    query_assignments[query_name] = output_index
+                digest = hashlib.blake2b(
+                    query_name.encode(), key=salt[:64], digest_size=8
+                ).digest()
+                output_index = int.from_bytes(digest, "big") % len(outputs)
 
                 outputs[output_index].write(alignment)
 

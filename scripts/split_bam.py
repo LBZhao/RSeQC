@@ -252,16 +252,25 @@ def classify_alignment(
     ).upper()
     read_start = aligned_read.reference_start
 
-    if aligned_read.mate_is_unmapped:
+    if (
+        not aligned_read.is_paired
+        or aligned_read.mate_is_unmapped
+        or aligned_read.next_reference_id < 0
+    ):
+        # No mapped mate: classify by this read alone.
         if overlaps_exon_start(exon_ranges, chromosome, read_start):
             return "in"
         return "ex"
 
     mate_start = aligned_read.next_reference_start
+    # The mate can map to another chromosome; look its start up there.
+    mate_chromosome = samfile.get_reference_name(
+        aligned_read.next_reference_id
+    ).upper()
 
     if (
         overlaps_exon_start(exon_ranges, chromosome, read_start)
-        or overlaps_exon_start(exon_ranges, chromosome, mate_start)
+        or overlaps_exon_start(exon_ranges, mate_chromosome, mate_start)
     ):
         return "in"
 
@@ -334,7 +343,7 @@ def index_bam(path: Path) -> None:
     except pysam.utils.SamtoolsError as exc:
         raise RuntimeError(
             f"could not index {path}; output BAM may not be "
-            "coordinate-sorted: {exc}"
+            f"coordinate-sorted: {exc}"
         ) from exc
 
 

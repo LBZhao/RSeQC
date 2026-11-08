@@ -296,6 +296,16 @@ def calculate_fpkm(
     uq_count = np.percentile(sorted(protein_coding_counts), 75)
     total_count = sum(protein_coding_counts)
 
+    # numpy division by zero gives inf instead of raising, which used to
+    # turn every FPKM-UQ value into inf for shallow or targeted data.
+    if uq_count <= 0:
+        raise ValueError(
+            "the 75th percentile of protein-coding gene counts is 0, so "
+            "FPKM-UQ is undefined (too few reads or too few expressed genes)"
+        )
+    if total_count <= 0:
+        raise ValueError("no reads were counted for protein-coding genes")
+
     print(
         f"\tTotal protein-coding genes: {len(protein_coding_counts)}",
         file=sys.stderr,
@@ -355,8 +365,15 @@ def calculate_fpkm(
                 continue
 
             gene_size = gene_sizes[gene_id]
+            if gene_size <= 0:
+                print(
+                    f"Warning: {gene_id} has exon length {gene_size}; FPKM set to NA",
+                    file=sys.stderr,
+                )
 
             try:
+                if gene_size <= 0:
+                    raise ZeroDivisionError
                 if log2_flag:
                     fpkm_uq = np.log2(
                         (count * 1_000_000_000)

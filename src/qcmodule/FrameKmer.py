@@ -12,7 +12,7 @@ import re
 from collections import Counter
 
 
-_DNA_PATTERN = re.compile(r"^[ACGTN]+$")
+_NON_ACGT = re.compile(r"[^ACGT]")
 
 
 def word_generator(seq, word_size, step_size, frame=0):
@@ -43,36 +43,62 @@ def word_generator(seq, word_size, step_size, frame=0):
 
 
 def seq_generator(fastafile):
-    """Yield ``[name, sequence]`` records from a FASTA-like file.
+    """Yield ``[name, sequence]`` records from a FASTA or FASTQ file.
 
-    Sequence lines containing characters other than A, C, G, T, or N are
-    ignored, preserving the behavior of the original implementation.
-    Header lines may begin with ``>`` or ``@``.
+    The format is taken from the first record: ``>`` means FASTA (sequences
+    may span several lines), ``@`` means FASTQ (four lines per record; the
+    quality line is never read as sequence). Sequences are upper-cased and
+    any character other than A, C, G or T becomes N, so k-mers across
+    ambiguous bases are skipped rather than created by joining lines.
+
+    Before RSeQC 5.1.0, FASTQ quality lines made only of the characters
+    A/C/G/T/N (valid quality codes) were counted as sequence, quality lines
+    starting with ``@`` started a new record, and FASTA lines with any IUPAC
+    code were dropped, joining their neighbours into false k-mers.
     """
-    name = None
-    seq_parts = []
-
     with open(fastafile, "r") as handle:
-        for line in handle:
-            line = line.strip().upper()
+        raw = (line.strip() for line in handle)
+        first = next((line for line in raw if line and not line.startswith("#")), None)
+        if first is None:
+            return
+        if first.startswith("@"):
+            # FASTQ: keep blank lines (zero-length reads are valid).
+            yield from _fastq_records(first, raw, fastafile)
+        else:
+            lines = (line for line in raw if line and not line.startswith("#"))
+            yield from _fasta_records(first, lines)
 
-            if not line or line.startswith("#"):
-                continue
 
-            if line.startswith((">", "@")):
-                if name is not None:
-                    yield [name, "".join(seq_parts)]
-                name = line.split()[0][1:]
-                seq_parts = []
-            elif _DNA_PATTERN.fullmatch(line):
-                # Preserve the old behavior: valid sequence before a header
-                # is accumulated and ultimately associated with an empty name.
-                seq_parts.append(line)
+def _clean(seq):
+    return _NON_ACGT.sub("N", seq.upper())
 
-    if name is not None:
-        yield [name, "".join(seq_parts)]
-    elif seq_parts:
-        yield ["", "".join(seq_parts)]
+
+def _fasta_records(first, lines):
+    name = first[1:].split()[0] if first.startswith(">") else ""
+    parts = [] if first.startswith(">") else [_clean(first)]
+    for line in lines:
+        if line.startswith(">"):
+            yield [name, "".join(parts)]
+            name = line[1:].split()[0] if len(line) > 1 else ""
+            parts = []
+        else:
+            parts.append(_clean(line))
+    yield [name, "".join(parts)]
+
+
+def _fastq_records(first, lines, path):
+    header = first
+    while header is not None:
+        if not header:                      # trailing blank lines
+            header = next(lines, None)
+            continue
+        seq = next(lines, None)
+        plus = next(lines, None)
+        qual = next(lines, None)
+        if qual is None or not plus.startswith("+") or not header.startswith("@"):
+            raise ValueError(f"{path}: malformed FASTQ record starting {header!r}")
+        yield [header[1:].split()[0] if len(header) > 1 else "", _clean(seq)]
+        header = next(lines, None)
 
 
 def all_possible_kmer(l):

@@ -322,15 +322,17 @@ def overlay_bigwigs(
                         )
 
                         result = callback(signal1, signal2)
-                        coordinate = start
-
-                        for value in result:
-                            coordinate += 1
-                            if value != 0:
-                                print(
-                                    f"{coordinate}\t{value:.2f}",
-                                    file=output,
-                                )
+                        # Positions where both inputs are 0 have no data.
+                        # Division gives (0+1)/(0+1) = 1 there, which used
+                        # to be written only inside chunks that had some
+                        # signal, so identical regions got 1 or nothing
+                        # depending on their neighbours.
+                        has_data = (signal1 != 0) | (signal2 != 0)
+                        for offset in np.flatnonzero(has_data & (result != 0)):
+                            print(
+                                f"{start + offset + 1}\t{result[offset]:.2f}",
+                                file=output,
+                            )
 
         finally:
             bigwig2.close()
