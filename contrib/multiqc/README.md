@@ -24,7 +24,7 @@ Tested against MultiQC `main` at `a286ece`:
 ## The LBZhao/MultiQC fork
 
 The two patches here make up the fork at https://github.com/LBZhao/MultiQC
-(official MultiQC `main` at `a286ece` plus these commits):
+(official MultiQC plus these commits):
 
 1. `0001-rseqc-novel-combination-noncoding.patch`: the RSeQC module change.
 2. `0002-identify-lbzhao-fork.patch`: marks the fork as not official
@@ -34,10 +34,13 @@ To recreate it, fork https://github.com/MultiQC/MultiQC on GitHub, then:
 
 ```bash
 git clone https://github.com/LBZhao/MultiQC && cd MultiQC
-git checkout a286ece -b lbzhao-main
 git am <path>/0001-rseqc-novel-combination-noncoding.patch <path>/0002-identify-lbzhao-fork.patch
-git push --force origin lbzhao-main:main
+git push origin main
 ```
+
+This applies the patches on top of the fork's current `main` (they were
+made against `a286ece`; if `git am` reports a conflict, the official
+MultiQC changed the same lines and the patch needs updating).
 
 Install it with `pip install git+https://github.com/LBZhao/MultiQC.git`.
 
