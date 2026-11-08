@@ -140,6 +140,20 @@ Release history
 * Library code raises exceptions instead of calling ``sys.exit``; errors
   opening alignment files report the real cause.
 
+* **R is no longer needed.** All plots are drawn in Python with matplotlib
+  (already a dependency), including the ``sc_editMatrix.py`` and
+  ``sc_seqQual.py`` heatmaps, which used the R package pheatmap. Plot file
+  names are unchanged; the plots look different. The R scripts (``*.r``) are
+  still written next to the data, so MultiQC and custom R plotting keep
+  working, but they are not run. ``--rscript``, ``--install-r-deps`` and
+  ``--cran-mirror`` are accepted and ignored. ``inner_distance.py`` prints
+  its mean/median/SD from the measured distances (R used histogram-bin
+  midpoints).
+
+* New ``--tsv PATH`` option for ``bam_stat.py``, ``read_distribution.py``
+  and ``infer_experiment.py``: also write the results as a tab-separated
+  table. The text reports are unchanged.
+
 * Added unit and end-to-end tests (``tests/``), run in CI.
 
 **RSeQC v5.0.6**
@@ -399,6 +413,8 @@ Install the latest stable release from PyPI::
 
  pip install RSeQC
 
+RSeQC needs only Python packages; R is not required (since v5.1.0).
+
 Or install the latest development version from GitHub::
 
 
@@ -577,6 +593,7 @@ Options:
                         Alignment file in BAM or SAM format.
   -q MAP_QUAL, --mapq=MAP_QUAL
                         `Minimum mapping quality <http://genome.sph.umich.edu/wiki/Mapping_Quality_Scores>`_ to determine uniquely mapped read.
+  --tsv PATH            Also write the results as a tab-separated table (v5.1.0).
 
 Example::
 
@@ -877,8 +894,8 @@ Options::
   --per-transcript      Also write each transcript's 100-slice profile.
   -f, --format {pdf,png,jpeg}
                         Plot output format. Default: pdf
-  --skip-plot           Generate data and R code but do not run R.
-  --rscript PATH        Rscript executable to use. Default: Rscript
+  --skip-plot           Write the data files (and the R script) but no plots.
+  --rscript PATH        Ignored since v5.1.0 (plots are drawn in Python).
 
 Output files (``PREFIX.geneBodyCoverage.*``):
 
@@ -960,8 +977,8 @@ Options::
   --length-bins EDGES   mRNA length bin edges in bp, e.g. '1000,2000,4000';
                         'auto' uses quartiles of the BED file's transcript
                         lengths; 'none' disables binning. Default: 1000,2000,4000
-  --skip-plot           Generate data and R code but do not run R.
-  --rscript PATH        Rscript executable to use. Default: Rscript
+  --skip-plot           Write the data files (and the R script) but no plots.
+  --rscript PATH        Ignored since v5.1.0 (plots are drawn in Python).
 
 Output files (``PREFIX.geneBodyCoverage.*``):
 
@@ -1031,6 +1048,8 @@ Options:
                         Minimum mapping quality (phred scaled) for an
                         alignment to be considered as "uniquely mapped".
                         default=30
+  --seed INT            Random seed for choosing which genes to sample (v5.1.0).
+  --tsv PATH            Also write the results as a tab-separated table (v5.1.0).
 
 **Example 1: Pair-end non strand specific**::
 
@@ -1450,6 +1469,7 @@ Options:
   -r REF_GENE_MODEL, --refgene=REF_GENE_MODEL
                         Reference gene model in bed format.
   -q INT, --mapq INT    Minimum mapping quality of reads to count. Default: 30
+  --tsv PATH            Also write the results as a tab-separated table (v5.1.0).
 
 Example::
 
@@ -1857,7 +1877,7 @@ This program generates heatmap from a `FASTQ <https://en.wikipedia.org/wiki/FAST
 
 .. NOTE::
 
-   This function requires the `pheatmap <https://cran.r-project.org/web/packages/pheatmap/pheatmap.pdf>`_ R package.
+   Since v5.1.0 the heatmap is drawn with matplotlib; R and the pheatmap package are not needed. (The example log below is from an earlier release.)
  
  
 Options:
@@ -1921,7 +1941,7 @@ This program generates heatmaps to visualize where are those **corrections** (i.
 
 .. NOTE::
 
-   This function requires the `pheatmap <https://cran.r-project.org/web/packages/pheatmap/pheatmap.pdf>`_ R package.
+   Since v5.1.0 the heatmap is drawn with matplotlib; R and the pheatmap package are not needed. (The example log below is from an earlier release.)
 
 Options:
    --version             show program's version number and exit

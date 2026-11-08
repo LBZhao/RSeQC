@@ -14,13 +14,12 @@ from __future__ import annotations
 import argparse
 import collections
 import operator
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
 import numpy as np
 from qcmodule import SAM
+from qcmodule import plotting
 from importlib.metadata import version
 
 __version__ = version("RSeQC")
@@ -159,13 +158,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-plot",
         action="store_true",
-        help="Generate saturation data and R script without executing R.",
+        help="Write the data files (and the R script) but do not draw plots.",
     )
     parser.add_argument(
         "--rscript",
         default="Rscript",
         metavar="PATH",
-        help="Rscript executable to use. Default: %(default)s",
+        help="Ignored: plots are drawn in Python since RSeQC 5.1.0 (R is not needed).",
     )
     parser.add_argument(
         "--seed",
@@ -330,8 +329,13 @@ def show_saturation(
     infile: Path,
     outfile: Path,
     rpkm_cutoff: float = 0.01,
-) -> None:
-    """Generate the original quartile-based R saturation plot script."""
+) -> dict[str, dict[str, list[float]]]:
+    """Write the quartile-based R saturation script and return the data.
+
+    Returns ``{quartile: {sampling_percentage: [relative errors]}}``, which
+    :func:`qcmodule.plotting.rpkm_saturation` draws.
+    """
+    groups: dict[str, dict[str, list[float]]] = {}
     header, rpkm_errors, rpkm_means = parse_rpkm_table(
         infile,
         rpkm_cutoff,
@@ -396,6 +400,10 @@ def show_saturation(
                     f"S{sample}=c({r_vector(normalized_rpkm[sample])})",
                     file=rout,
                 )
+            groups[quantile] = {
+                sample: [float(v) for v in normalized_rpkm[sample]]
+                for sample in plot_headers
+            }
 
             series = ",".join(f"100*S{sample}" for sample in plot_headers)
             print(
@@ -412,38 +420,7 @@ def show_saturation(
 
         print("dev.off()", file=rout)
 
-
-def run_plot_script(
-    parser: argparse.ArgumentParser,
-    script_path: Path,
-    rscript_executable: str,
-) -> None:
-    """Execute the generated R plotting script safely."""
-    if not script_path.is_file():
-        parser.exit(
-            1,
-            f"{parser.prog}: error: expected R script was not created: "
-            f"{script_path}\n",
-        )
-
-    resolved_rscript = shutil.which(rscript_executable)
-    if resolved_rscript is None:
-        parser.exit(
-            1,
-            f"{parser.prog}: error: Rscript executable not found: "
-            f"{rscript_executable}\n",
-        )
-
-    try:
-        subprocess.run(
-            [resolved_rscript, str(script_path)],
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        parser.exit(
-            exc.returncode or 1,
-            f"{parser.prog}: error: R plotting failed for {script_path}\n",
-        )
+    return groups
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -473,7 +450,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"expected saturation table was not created: {rpkm_table}"
             )
 
-        show_saturation(
+        plot_data = show_saturation(
             infile=rpkm_table,
             outfile=plot_script,
             rpkm_cutoff=args.rpkm_cutoff,
@@ -483,11 +460,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.exit(1, f"{parser.prog}: error: {exc}\n")
 
     if not args.skip_plot:
-        run_plot_script(
-            parser=parser,
-            script_path=plot_script,
-            rscript_executable=args.rscript,
-        )
+        plotting.run(parser, lambda: plotting.rpkm_saturation(plot_data, plot_script.with_suffix(".pdf")))
 
     return 0
 

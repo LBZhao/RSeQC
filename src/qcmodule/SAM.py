@@ -216,24 +216,32 @@ class ParseBAM(object):
         print("\n#==================================================", file=sys.stdout)
         print("#All numbers are READ count", file=sys.stdout)
         print("#==================================================\n", file=sys.stdout)
-        print("%-40s%d" % ("Total records:",R_total), file=sys.stdout)
-        print("\n", end='', file=sys.stdout)
-        print("%-40s%d" % ("QC failed:",R_qc_fail), file=sys.stdout)
-        print("%-40s%d" % ("Optical/PCR duplicate:", R_duplicate), file=sys.stdout)
-        print("%-40s%d" % ("Non primary hits", R_nonprimary), file=sys.stdout)
-        print("%-40s%d" % ("Supplementary hits:", R_supplementary), file=sys.stdout)
-        print("%-40s%d" % ("Unmapped reads:",R_unmap), file=sys.stdout)
-        print("%-40s%d" % ("mapq < mapq_cut (non-unique):",R_multipleHit), file=sys.stdout)
-        print("\n", end='', file=sys.stdout)
-        print("%-40s%d" % ("mapq >= mapq_cut (unique):",R_uniqHit), file=sys.stdout)
-        print("%-40s%d" % ("Read-1:",R_read1), file=sys.stdout)
-        print("%-40s%d" % ("Read-2:",R_read2), file=sys.stdout)
-        print("%-40s%d" % ("Reads map to '+':",R_forward), file=sys.stdout)
-        print("%-40s%d" % ("Reads map to '-':",R_reverse), file=sys.stdout)
-        print("%-40s%d" % ("Non-splice reads:",R_nonSplice), file=sys.stdout)
-        print("%-40s%d" % ("Splice reads:",R_splice), file=sys.stdout)  
-        print("%-40s%d" % ("Reads mapped in proper pairs:",R_properPair), file=sys.stdout)
-        print("%-40s%d" % ("Proper-paired reads map to different chrom:",R_pair_diff_chrom), file=sys.stdout)
+        rows = [
+            ("total_records", "Total records:", R_total),
+            None,
+            ("qc_failed", "QC failed:", R_qc_fail),
+            ("duplicates", "Optical/PCR duplicate:", R_duplicate),
+            ("non_primary", "Non primary hits", R_nonprimary),
+            ("supplementary", "Supplementary hits:", R_supplementary),
+            ("unmapped", "Unmapped reads:", R_unmap),
+            ("low_mapq", "mapq < mapq_cut (non-unique):", R_multipleHit),
+            None,
+            ("unique", "mapq >= mapq_cut (unique):", R_uniqHit),
+            ("read_1", "Read-1:", R_read1),
+            ("read_2", "Read-2:", R_read2),
+            ("forward_strand", "Reads map to '+':", R_forward),
+            ("reverse_strand", "Reads map to '-':", R_reverse),
+            ("non_spliced", "Non-splice reads:", R_nonSplice),
+            ("spliced", "Splice reads:", R_splice),
+            ("proper_pairs", "Reads mapped in proper pairs:", R_properPair),
+            ("proper_pairs_diff_chrom", "Proper-paired reads map to different chrom:", R_pair_diff_chrom),
+        ]
+        for row in rows:
+            if row is None:
+                print("\n", end='', file=sys.stdout)
+            else:
+                print("%-40s%d" % (row[1], row[2]), file=sys.stdout)
+        return [(key, value) for key, _label, value in (r for r in rows if r is not None)]
     
     def configure_experiment(self,refbed,sample_size, q_cut = 30, seed = 0):
         """Guess the RNA-seq library layout and strandedness.
@@ -622,7 +630,11 @@ class ParseBAM(object):
             print("dev.off()", file=RS)
         
         RS.close()
-        #self.f.seek(0)
+
+        return {
+            "counts": {base: [base_freq[str(i) + base] for i in range(max_len)] for base in "ACGTNX"},
+            "include_nx": nx,
+        }
 
     def readsQual_boxplot(self,outfile,shrink=1000, q_cut=30):
         '''calculate phred quality score for each base in read (5->3)'''
@@ -689,7 +701,9 @@ class ParseBAM(object):
         print('Lab.palette <- colorRampPalette(c("blue", "orange", "red3","red2","red1","red"), space = "rgb",interpolate=c(\'spline\'))', file=FO)
         print("heatmap(mat,Rowv=NA,Colv=NA,xlab=\"Position of Read\",ylab=\"Phred Quality Score\",labRow=seq(from=%s,to=%s),col = Lab.palette(256),scale=\"none\" )" % (q_min,q_max), file=FO)
         print('dev.off()', file=FO)
-        
+        FO.close()
+        return {"quality": {pos: dict(quality[pos]) for pos in range(read_len)}}
+
     def readGC(self,outfile=None, q_cut=30):
         '''GC content distribution of reads'''
         if outfile is None:
@@ -731,7 +745,9 @@ class ParseBAM(object):
         print('hist(gc,probability=T,breaks=%d,xlab="GC content (%%)",ylab="Density of Reads",border="blue",main="")' % 100, file=RS)
         #print >>RS, "lines(density(gc),col='red')"
         print("dev.off()", file=RS)     
-        #self.f.seek(0)
+        FO.close()
+        RS.close()
+        return {"gc_hist": {float(k): v for k, v in gc_hist.items()}}
 
     def readDupRate(self,q_cut, outfile=None,up_bound=500):
         '''Calculate read duplication rates by sequence and by mapping position.
@@ -820,7 +836,8 @@ class ParseBAM(object):
         print('axis(side=4,at=c(log10(pos_uniqRead[1]),log10(pos_uniqRead[2]),log10(pos_uniqRead[3]),log10(pos_uniqRead[4])), labels=c(round(pos_uniqRead[1]*100/sum(pos_uniqRead*pos_occ)),round(pos_uniqRead[2]*100/sum(pos_uniqRead*pos_occ)),round(pos_uniqRead[3]*100/sum(pos_uniqRead*pos_occ)),round(pos_uniqRead[4]*100/sum(pos_uniqRead*pos_occ))))', file=RS)
         print('mtext(4, text = "Reads %", line = 2)', file=RS)
         print('dev.off()', file=RS)
-        #self.f.seek(0)
+        RS.close()
+        return {"sequence": dict(seqDup_count), "position": dict(posDup_count), "up_bound": up_bound}
 
     def clipping_profile(self, outfile, q_cut, PE, type="S"):
         """Calculate the positional profile of soft clipping.
@@ -1070,6 +1087,12 @@ class ParseBAM(object):
 
         OUT.close()
         ROUT.close()
+        if PE:
+            return {
+                "R1": (read_pos_r1, r1_clip_count, r1_nonclip_count),
+                "R2": (read_pos_r2, r2_clip_count, r2_nonclip_count),
+            }
+        return {"": (read_pos, clip_count, nonclip_count)}
 
     def insertion_profile(self,outfile, q_cut, PE, type="I"):
         '''calculate profile of insertion'''
@@ -1195,7 +1218,15 @@ class ParseBAM(object):
             print("r2_noninsert_count = %d - r2_insert_count" % (total_read2), file=ROUT)
             print('plot(read_pos, r2_insert_count*100/(r2_insert_count + r2_noninsert_count),col="blue",main="Insertion profile",xlab="Position of read (read-2)",ylab="Insertion %",type="b")', file=ROUT)
             print("dev.off()", file=ROUT)
-    
+        OUT.close()
+        ROUT.close()
+        if PE:
+            return {
+                "R1": (read_pos, r1_clip_count, [total_read1 - c for c in r1_clip_count]),
+                "R2": (read_pos, r2_clip_count, [total_read2 - c for c in r2_clip_count]),
+            }
+        return {"": (read_pos, clip_count, [total_read - c for c in clip_count])}
+
     def mRNA_inner_distance(self,outfile,refbed,low_bound=0,up_bound=1000,step=10,sample_size=1000000, q_cut=30, seed=0):
         """Estimate the inner distance (insert size minus both read lengths)
         of paired-end fragments.
@@ -1328,7 +1359,7 @@ class ParseBAM(object):
         print("dev.off()", file=RS)
         FQ.close()
         RS.close()
-        #self.f.seek(0)
+        return {"distances": distances, "low_bound": low_bound, "up_bound": up_bound, "step": step}
 
     def annotate_junction(self,refgene,outfile,min_intron=50, q_cut=30):
         """Annotate splice junctions in a BAM/SAM file against a BED12 gene model.
@@ -1424,7 +1455,7 @@ class ParseBAM(object):
                 print("x=c(" + ','.join(str(v) for v in values) + ')', file=ROUT)
                 print('pie(x,col=c(4,6,2,3),init.angle=30,main="%s",labels=c(%s))' % (title, labels), file=ROUT)
                 print("dev.off()", file=ROUT)
-
+        return {"events": event_counts, "junctions": junction_counts}
 
     def saturation_junction(self,refgene,outfile=None,sample_start=5,sample_step=5,sample_end=100,min_intron=50,recur=1, q_cut=30, seed=None):
         '''check if an RNA-seq experiment is saturated in terms of detecting known splicing junction.
@@ -1547,6 +1578,13 @@ class ParseBAM(object):
         print("points(x,w/1000,type='o',col='green')", file=OUT)
         print('legend(5,%d, legend=c("All junctions","known junctions", "novel junctions"),col=c("blue","red","green"),lwd=1,pch=1)' % int(int(all_junc[-1])/1000), file=OUT)
         print("dev.off()", file=OUT)
+        OUT.close()
+        return {
+            "percent": tmp,
+            "all": [int(i) for i in all_junc],
+            "known": [int(i) for i in known_junc],
+            "novel": [int(i) for i in unknown_junc],
+        }
 
     def saturation_RPKM(self,refbed,outfile,sample_start=5,sample_step=5,sample_end=100,skip_multi=True, strand_rule=None, q_cut=30, seed=None):
         '''for each gene, check if its RPKM (epxresion level) has already been saturated or not'''
@@ -1844,8 +1882,9 @@ class ParseBAM(object):
             count += 1
         print("legend(13,y_up_bound,legend=c(%s), fill=color_code, border=color_code, ncol=4)" % (','.join(['"' + i + '"' for i in all_genotypes])), file=ROUT)
         print("dev.off()", file=ROUT)
-            
-            
+        ROUT.close()
+        return {"positions": sorted(data), "counts": {gt: list(r_data[gt]) for gt in all_genotypes}}
+
     def deletionProfile(self,read_length,read_num, outfile, q_cut=30):
         '''
         Calculate deletion profile. 
@@ -1924,7 +1963,8 @@ class ParseBAM(object):
         print("value=c(%s)" % ','.join([i for i in del_count]), file=ROUT)      
         print("plot(pos,value,type='b', col='blue',xlab=\"Read position (5\'->3\')\", ylab='Deletion count')", file=ROUT)                   
         print("dev.off()", file=ROUT)
-
+        ROUT.close()
+        return {"positions": list(range(read_length)), "counts": [int(c) for c in del_count]}
 
 def print_bits_as_bed( bits ):
     end = 0

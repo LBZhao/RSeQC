@@ -464,3 +464,92 @@ def test_no_data_cases_exit_zero_with_message(tmp_path, bam_builder):
     result = run_script("junction_annotation.py", "-i", bam, "-r", bed, "-o", tmp_path / "j",
                         "--skip-plot", "--skip-bed", "--skip-interact")
     assert "No splice junction found" in result.stderr
+
+
+# --------------------------------------------------------------------------
+# --tsv tables
+# --------------------------------------------------------------------------
+
+
+def test_tsv_tables(tmp_path, bam_builder):
+    bed = write_bed(tmp_path, [bed12_line("g", "+", GENE)])
+    builder = bam_builder()
+    builder.add(1100, "50M")
+    builder.add(1250, "50M3700N50M")
+    builder.add(5100, "50M", flag=0x10)
+    builder.add(5200, "50M", flag=0x800)
+    bam = builder.write()
+
+    stat_tsv = tmp_path / "stat.tsv"
+    text = run_script("bam_stat.py", "-i", bam, "--tsv", stat_tsv).stdout
+    stats = dict(row for row in table(stat_tsv)[1:])
+    assert table(stat_tsv)[0] == ["metric", "reads"]
+    assert stats["total_records"] == "4"
+    assert stats["supplementary"] == "1"
+    assert stats["spliced"] == "1"
+    assert stats["reverse_strand"] == "1"
+    assert "Splice reads:                           1" in text   # text unchanged
+
+    dist_tsv = tmp_path / "dist.tsv"
+    run_script("read_distribution.py", "-i", bam, "-r", bed, "--tsv", dist_tsv)
+    rows = {row[0]: row[1:] for row in table(dist_tsv)[1:]}
+    assert rows["Total_Reads"] == ["NA", "3", "NA"]
+    assert rows["Total_Tags"][1] == "4"
+    assert rows["CDS_Exons"][:2] == ["1000", "4"]       # whole transcript is CDS
+    assert rows["Noncoding_Exons"][:2] == ["0", "0"]
+
+    infer_tsv = tmp_path / "infer.tsv"
+    run_script("infer_experiment.py", "-i", bam, "-r", bed, "-s", "1000", "--tsv", infer_tsv)
+    values = dict(row for row in table(infer_tsv)[1:])
+    assert values["layout"] == "SingleEnd"
+    assert float(values["fraction_++,--"]) == pytest.approx(2 / 3)
+    assert float(values["fraction_+-,-+"]) == pytest.approx(1 / 3)
+
+
+# --------------------------------------------------------------------------
+# Plots are drawn in Python (no R)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def plot_dataset(tmp_path, bam_builder):
+    import random
+    from conftest import exonic_alignment
+    bed = write_bed(tmp_path, [bed12_line("g", "+", GENE), bed12_line("h", "-", [(20000, 21500)])])
+    rng = random.Random(3)
+    builder = bam_builder()
+    for i in range(200):
+        start, cigar = exonic_alignment(GENE, rng.randint(0, 900), 50)
+        mate_start, mate_cigar = exonic_alignment(GENE, rng.randint(0, 900), 50)
+        if i % 4 == 0:
+            cigar = "5S" + cigar
+        (s1, c1), (s2, c2) = sorted([(start, cigar), (mate_start, mate_cigar)])
+        builder.add_pair(s1, c1, s2, c2)
+        builder.add_pair(20000 + i * 5, "50M", 20200 + i * 5, "50M")
+    bam = builder.write()
+    return tmp_path, bed, bam
+
+
+@pytest.mark.parametrize("script, args, images", [
+    ("read_NVC.py", [], ["NVC_plot.pdf"]),
+    ("read_GC.py", [], ["GC_plot.pdf"]),
+    ("read_quality.py", [], ["qual.boxplot.pdf", "qual.heatmap.pdf"]),
+    ("read_duplication.py", [], ["DupRate_plot.pdf"]),
+    ("clipping_profile.py", ["-s", "PE"], ["clipping_profile.R1.pdf", "clipping_profile.R2.pdf"]),
+    ("insertion_profile.py", ["-s", "SE"], ["insertion_profile.pdf"]),
+    ("deletion_profile.py", ["-l", "50"], ["deletion_profile.pdf"]),
+    ("inner_distance.py", ["BED"], ["inner_distance_plot.pdf"]),
+    ("junction_annotation.py", ["BED"], ["splice_events.pdf", "splice_junction.pdf"]),
+    ("junction_saturation.py", ["BED"], ["junctionSaturation_plot.pdf"]),
+    ("RPKM_saturation.py", ["BED"], ["saturation.pdf"]),
+])
+def test_plots_without_r(plot_dataset, script, args, images, monkeypatch):
+    tmp_path, bed, bam = plot_dataset
+    monkeypatch.setenv("PATH", "/nonexistent")       # no Rscript anywhere
+    gene_model = ["-r", bed] if "BED" in args else []
+    args = [a for a in args if a != "BED"]
+    prefix = tmp_path / script.split(".")[0]
+    run_script(script, "-i", bam, *gene_model, "-o", prefix, *args)
+    for image in images:
+        path = Path(f"{prefix}.{image}")
+        assert path.is_file() and path.stat().st_size > 0, path

@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 from qcmodule import SAM
+from qcmodule import tables
 from importlib.metadata import version
 
 
@@ -105,6 +106,13 @@ def build_parser() -> argparse.ArgumentParser:
             "Random seed for choosing which genes to sample reads from. "
             "Default: %(default)s"
         ),
+    )
+    parser.add_argument(
+        "--tsv",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Also write the results as a tab-separated table to PATH.",
     )
     parser.add_argument(
         "--version",
@@ -227,6 +235,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         strand_pattern_2=strand_pattern_2,
         undetermined=undetermined,
     )
+
+    if args.tsv is not None:
+        if protocol == "PairEnd":
+            patterns = ("1++,1--,2+-,2-+", "1+-,1-+,2++,2--")
+        else:
+            patterns = ("++,--", "+-,-+")
+        try:
+            tables.write_tsv(args.tsv, ("metric", "value"), [
+                ("layout", protocol),
+                ("fraction_undetermined", max(float(undetermined), 0.0)),
+                ("fraction_" + patterns[0], float(strand_pattern_1)),
+                ("fraction_" + patterns[1], float(strand_pattern_2)),
+            ])
+        except OSError as exc:
+            parser.exit(1, f"{parser.prog}: error: {exc}\n")
 
     return 0
 

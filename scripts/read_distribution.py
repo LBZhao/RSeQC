@@ -27,6 +27,7 @@ from bx.intervals.intersection import Intersecter, Interval
 
 from qcmodule import BED
 from qcmodule import SAM
+from qcmodule import tables
 from qcmodule import bam_cigar
 from importlib.metadata import version
 
@@ -150,6 +151,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=30,
         metavar="INT",
         help="Minimum mapping quality of reads to count. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--tsv",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Also write the results as a tab-separated table to PATH.",
     )
     parser.add_argument(
         "--version",
@@ -530,6 +538,34 @@ def print_report(
     print("=" * 69)
 
 
+def write_tsv_report(path: Path, model: RegionModel, counts: DistributionCounts) -> None:
+    """The report as a table: one row per group plus total rows.
+
+    Total rows only have a tag (or read) count; other cells are NA.
+    """
+    groups = [
+        ("CDS_Exons", model.cds_exon_bases, counts.cds_exon),
+        ("5'UTR_Exons", model.utr_5_bases, counts.utr_5),
+        ("3'UTR_Exons", model.utr_3_bases, counts.utr_3),
+        ("Noncoding_Exons", model.noncoding_exon_bases, counts.noncoding_exon),
+        ("Introns", model.intron_bases, counts.intron),
+        ("TSS_up_1kb", model.upstream_1kb_bases, counts.upstream_1kb),
+        ("TSS_up_5kb", model.upstream_5kb_bases, counts.upstream_5kb),
+        ("TSS_up_10kb", model.upstream_10kb_bases, counts.upstream_10kb),
+        ("TES_down_1kb", model.downstream_1kb_bases, counts.downstream_1kb),
+        ("TES_down_5kb", model.downstream_5kb_bases, counts.downstream_5kb),
+        ("TES_down_10kb", model.downstream_10kb_bases, counts.downstream_10kb),
+    ]
+    rows = [
+        ("Total_Reads", None, counts.total_reads, None),
+        ("Total_Tags", None, counts.total_tags, None),
+        ("Total_Assigned_Tags", None, counts.total_tags - counts.unassigned_tags, None),
+    ] + [
+        (name, bases, tags, tags_per_kb(tags, bases)) for name, bases, tags in groups
+    ]
+    tables.write_tsv(path, ("group", "total_bases", "tag_count", "tags_per_kb"), rows)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run read-distribution analysis."""
     parser = build_parser()
@@ -547,6 +583,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         model = process_gene_model(args.ref_gene_model)
         counts = count_read_distribution(args.input_file, model, args.min_mapq)
         print_report(model, counts)
+        if args.tsv is not None:
+            write_tsv_report(args.tsv, model, counts)
 
     except (OSError, ValueError, RuntimeError, IndexError) as exc:
         parser.exit(1, f"{parser.prog}: error: {exc}\n")

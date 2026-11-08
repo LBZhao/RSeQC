@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 from qcmodule import SAM
+from qcmodule import tables
 from importlib.metadata import version
 
 __author__ = "Liguo Wang"
@@ -37,6 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
             "Minimum mapping quality (Phred-scaled) used to identify "
             "uniquely mapped reads. Default: %(default)s"
         ),
+    )
+    parser.add_argument(
+        "--tsv",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Also write the results as a tab-separated table to PATH.",
     )
     parser.add_argument(
         "--version",
@@ -68,7 +76,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         alignment = SAM.ParseBAM(str(args.input_file))
-        alignment.stat(q_cut=args.map_qual)
+        stats = alignment.stat(q_cut=args.map_qual)
+        if args.tsv is not None:
+            tables.write_tsv(args.tsv, ("metric", "reads"), stats)
     except (OSError, ValueError) as exc:
         parser.exit(1, f"{parser.prog}: error: {exc}\n")
 

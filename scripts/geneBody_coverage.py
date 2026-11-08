@@ -23,8 +23,6 @@ from __future__ import annotations
 
 import argparse
 import math
-import shutil
-import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
@@ -35,6 +33,7 @@ from typing import Sequence
 import numpy as np
 
 from qcmodule import genebody
+from qcmodule import plotting
 from qcmodule import getBamFiles
 
 __version__ = version("RSeQC")
@@ -203,13 +202,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-plot",
         action="store_true",
-        help="Generate data and R code but do not execute the R script.",
+        help="Write the data files (and the R script) but do not draw plots.",
     )
     parser.add_argument(
         "--rscript",
         default="Rscript",
         metavar="PATH",
-        help="Rscript executable to use. Default: %(default)s",
+        help="Ignored: plots are drawn in Python since RSeQC 5.1.0 (R is not needed).",
     )
     parser.add_argument(
         "--version",
@@ -298,6 +297,42 @@ def _r_vector(values: Sequence[float]) -> str:
     return "c(" + ",".join(fmt(v) for v in values) + ")"
 
 
+def plot_inputs(
+    results: Sequence[genebody.SampleResult],
+    labels: Sequence[str],
+    transcript_norm: str,
+) -> tuple[dict, dict, dict]:
+    """Profiles for plotting, each scaled to its own mean (1.0 = uniform).
+
+    Returns ``(overall, by_length, counts)``: *overall* maps sample to
+    profile, ordered from least to most 3'/5' biased; *by_length* maps
+    length-bin label to {sample: profile}; *counts* maps label to
+    {sample: transcripts}.
+    """
+    overall: list[tuple[str, np.ndarray]] = []
+    for result in results:
+        rel = relative_profile(result.overall.result(transcript_norm))
+        if rel is not None:
+            overall.append((result.name, rel))
+    overall.sort(key=lambda item: genebody.bias_rank_key(item[1]))
+
+    by_length: dict[str, dict[str, np.ndarray]] = {}
+    counts: dict[str, dict[str, int]] = {}
+    for index, label in enumerate(labels):
+        by_length[label] = {}
+        counts[label] = {}
+        for result in results:
+            profile_sum = result.by_length[index]
+            if not profile_sum.n:
+                continue
+            rel = relative_profile(profile_sum.result(transcript_norm))
+            if rel is None:
+                continue
+            by_length[label][result.name] = rel
+            counts[label][result.name] = profile_sum.n
+    return dict(overall), by_length, counts
+
+
 def write_r_code(
     results: Sequence[genebody.SampleResult],
     labels: Sequence[str],
@@ -316,12 +351,10 @@ def write_r_code(
     ext = output_format.lower()
     device = {"pdf": "pdf", "png": "png", "jpeg": "jpeg"}[ext]
 
-    overall: list[tuple[str, np.ndarray]] = []
-    for result in results:
-        rel = relative_profile(result.overall.result(transcript_norm))
-        if rel is not None:
-            overall.append((result.name, rel))
-    overall.sort(key=lambda item: genebody.bias_rank_key(item[1]))
+    overall_profiles, length_profiles, length_counts = plot_inputs(
+        results, labels, transcript_norm
+    )
+    overall = list(overall_profiles.items())
 
     lines: list[str] = []
     add = lines.append
@@ -336,20 +369,14 @@ def write_r_code(
     for index, label in enumerate(labels):
         add(f"by_length[[{_r_string(label)}]] <- list()")
         add(f"by_length_n_{index} <- c()")
-        for result in results:
-            profile_sum = result.by_length[index]
-            if not profile_sum.n:
-                continue
-            rel = relative_profile(profile_sum.result(transcript_norm))
-            if rel is None:
-                continue
+        for name, rel in length_profiles[label].items():
             add(
-                f"by_length[[{_r_string(label)}]][[{_r_string(result.name)}]]"
+                f"by_length[[{_r_string(label)}]][[{_r_string(name)}]]"
                 f" <- {_r_vector(rel)}"
             )
             add(
-                f"by_length_n_{index}[{_r_string(result.name)}] <- "
-                f"{profile_sum.n}"
+                f"by_length_n_{index}[{_r_string(name)}] <- "
+                f"{length_counts[label][name]}"
             )
 
     add(f"""
@@ -433,33 +460,6 @@ if (length(by_length) > 1) {{
 
     r_script.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return r_script
-
-
-def run_r_script(
-    parser: argparse.ArgumentParser,
-    r_script: Path,
-    executable: str,
-) -> None:
-    """Execute the generated R script safely."""
-    resolved = shutil.which(executable)
-
-    if resolved is None:
-        parser.exit(
-            1,
-            f'{parser.prog}: error: Rscript executable not found: '
-            f'"{executable}"\n',
-        )
-
-    try:
-        subprocess.run(
-            [resolved, str(r_script)],
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        parser.exit(
-            exc.returncode or 1,
-            f"{parser.prog}: error: R plotting failed for {r_script}\n",
-        )
 
 
 # --------------------------------------------------------------------------
@@ -640,8 +640,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
         if not args.skip_plot:
-            printlog("Running R script ...")
-            run_r_script(parser, r_script, args.rscript)
+            printlog("Drawing plots ...")
+            overall, by_length, counts = plot_inputs(
+                results, labels if length_edges else [], args.transcript_norm
+            )
+            for image in plotting.genebody_curves(
+                overall, by_length, counts, str(plot_prefix), args.output_format
+            ):
+                printlog(f"Created: {image}")
 
         printlog(f"Created: {coverage_file}")
         printlog(f"Created: {metrics_file}")

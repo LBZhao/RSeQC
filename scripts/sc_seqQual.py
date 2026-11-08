@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -41,17 +39,12 @@ Generate matrices only:
         -o sample \
         --skip-heatmap
 
-Install the required R package automatically:
-    sc_seqQual.py \
-        -i reads.fastq.gz \
-        -o sample \
-        --install-r-deps
 
 Notes
 -----
 * Input must be FASTQ.
 * The percentage matrix is calculated independently for each read cycle.
-* Heatmap rendering requires R and the R package pheatmap.
+* Heatmaps are drawn with matplotlib; R is not needed.
 """
 
 
@@ -148,18 +141,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--rscript",
         default="Rscript",
         metavar="PATH",
-        help="Rscript executable used for dependency checks. Default: %(default)s",
+        help="Ignored: heatmaps are drawn in Python since RSeQC 5.1.0 (R is not needed).",
     )
     parser.add_argument(
         "--install-r-deps",
         action="store_true",
-        help="Install the R package pheatmap when it is missing.",
+        help="Ignored: heatmaps are drawn in Python since RSeQC 5.1.0 (R is not needed).",
     )
     parser.add_argument(
         "--cran-mirror",
         default="https://cloud.r-project.org",
         metavar="URL",
-        help="CRAN mirror used with --install-r-deps. Default: %(default)s",
+        help="Ignored: heatmaps are drawn in Python since RSeQC 5.1.0 (R is not needed).",
     )
     parser.add_argument(
         "--verbose",
@@ -216,85 +209,6 @@ def validate_args(
 
     if not output_parent.is_dir():
         parser.error(f"output parent is not a directory: {output_parent}")
-
-
-def resolve_rscript(executable: str) -> str:
-    """Resolve an Rscript executable."""
-    resolved = shutil.which(executable)
-
-    if resolved is None:
-        raise OSError(f"Rscript executable not found: {executable}")
-
-    return resolved
-
-
-def r_package_available(
-    rscript: str,
-    package: str,
-) -> bool:
-    """Return whether an R package is available."""
-    result = subprocess.run(
-        [
-            rscript,
-            "-e",
-            (
-                f"quit(status=ifelse(requireNamespace('{package}', "
-                "quietly=TRUE), 0, 1))"
-            ),
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return result.returncode == 0
-
-
-def install_r_package(
-    rscript: str,
-    package: str,
-    cran_mirror: str,
-) -> None:
-    """Install an R package from the selected CRAN mirror."""
-    logging.info("Installing R package %s from %s", package, cran_mirror)
-
-    subprocess.run(
-        [
-            rscript,
-            "-e",
-            (
-                f"install.packages('{package}', "
-                f"repos={cran_mirror!r})"
-            ),
-        ],
-        check=True,
-    )
-
-
-def ensure_r_dependencies(
-    rscript_executable: str,
-    install_missing: bool,
-    cran_mirror: str,
-) -> None:
-    """Ensure that R and pheatmap are available."""
-    rscript = resolve_rscript(rscript_executable)
-
-    if r_package_available(rscript, "pheatmap"):
-        return
-
-    if not install_missing:
-        raise RuntimeError(
-            "R package 'pheatmap' is not installed. Install it with "
-            "\"Rscript -e \\\"install.packages('pheatmap', "
-            "repos='https://cloud.r-project.org')\\\"\", rerun with "
-            "--install-r-deps, or use --skip-heatmap."
-        )
-
-    install_r_package(rscript, "pheatmap", cran_mirror)
-
-    if not r_package_available(rscript, "pheatmap"):
-        raise RuntimeError(
-            "R package 'pheatmap' is still unavailable after installation"
-        )
 
 
 def expected_output_paths(
@@ -390,11 +304,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         logging.info("Created %s", percent_path)
 
         if not args.skip_heatmap:
-            ensure_r_dependencies(
-                rscript_executable=args.rscript,
-                install_missing=args.install_r_deps,
-                cran_mirror=args.cran_mirror,
-            )
 
             if heatmap_path.exists():
                 heatmap_path.unlink()
@@ -419,12 +328,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             logging.info("Created %s", heatmap_path)
 
-    except subprocess.CalledProcessError as exc:
-        logging.error(
-            "R dependency installation failed with exit code %s",
-            exc.returncode,
-        )
-        return exc.returncode or 1
     except (
         OSError,
         ValueError,

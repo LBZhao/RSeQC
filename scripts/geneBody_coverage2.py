@@ -15,16 +15,14 @@ length, together with a 3'/5' ratio and a uniformity CV.
 from __future__ import annotations
 
 import argparse
-import shutil
-import subprocess
 import sys
 from importlib.metadata import version
 from pathlib import Path
 from typing import Sequence
 
-import numpy as np
 
 from qcmodule import genebody
+from qcmodule import plotting
 
 __version__ = version("RSeQC")
 __author__ = "Liguo Wang, Santiago Revale"
@@ -112,13 +110,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-plot",
         action="store_true",
-        help="Generate data and R code but do not execute the R script.",
+        help="Write the data files (and the R script) but do not draw plots.",
     )
     parser.add_argument(
         "--rscript",
         default="Rscript",
         metavar="PATH",
-        help="Rscript executable to use. Default: %(default)s",
+        help="Ignored: plots are drawn in Python since RSeQC 5.1.0 (R is not needed).",
     )
     parser.add_argument(
         "--version",
@@ -219,6 +217,7 @@ def coverage_gene_body_bigwig(
     length_bins: list[int] | str = "none",
     transcript_norm: str = "none",
     min_coverage: float = 0.0,
+    plot: bool = False,
 ) -> tuple[list[Path], Path, int]:
     """Calculate gene-body coverage from a BigWig and write all outputs.
 
@@ -293,47 +292,17 @@ def coverage_gene_body_bigwig(
         file=sys.stderr,
     )
 
-    write_r_script(
-        r_script,
-        profile,
-        result.overall.n,
-        f"{output_prefix}.geneBodyCoverage.{graph_type}",
-        graph_type,
-        ylab=(
-            "average wigsum"
-            if transcript_norm == "none"
-            else "signal (relative to transcript mean)"
-        ),
+    ylab = (
+        "average wigsum"
+        if transcript_norm == "none"
+        else "signal (relative to transcript mean)"
     )
+    plot_file = f"{output_prefix}.geneBodyCoverage.{graph_type}"
+    write_r_script(r_script, profile, result.overall.n, plot_file, graph_type, ylab=ylab)
+    if plot:
+        written.append(plotting.genebody_step(profile, result.overall.n, plot_file, ylab))
 
     return written, r_script, result.overall.n
-
-
-def run_r_script(
-    parser: argparse.ArgumentParser,
-    script_path: Path,
-    executable: str,
-) -> None:
-    """Execute the generated R script safely."""
-    resolved = shutil.which(executable)
-
-    if resolved is None:
-        parser.exit(
-            1,
-            f'{parser.prog}: error: Rscript executable not found: '
-            f'"{executable}"\n',
-        )
-
-    try:
-        subprocess.run(
-            [resolved, str(script_path)],
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        parser.exit(
-            exc.returncode or 1,
-            f"{parser.prog}: error: R plotting failed for {script_path}\n",
-        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -352,14 +321,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             length_bins=args.length_edges,
             transcript_norm=args.transcript_norm,
             min_coverage=args.min_coverage,
+            plot=not args.skip_plot,
         )
-
-        if not args.skip_plot:
-            run_r_script(
-                parser=parser,
-                script_path=r_script,
-                executable=args.rscript,
-            )
 
         for data_file in data_files:
             print(f"Created: {data_file}", file=sys.stderr)

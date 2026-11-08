@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Generate heatmaps with the R package pheatmap."""
+"""Draw labelled-matrix heatmaps with matplotlib.
+
+Before RSeQC 5.1.0 this ran the R package pheatmap. An equivalent R script
+is still written next to the image for anyone who prefers R, but it is not
+run and R is not needed.
+"""
 
 from __future__ import annotations
 
 import logging
-import subprocess
 from pathlib import Path
 
 SUPPORTED_FILETYPES = {"png", "pdf", "tiff", "bmp", "jpeg"}
@@ -29,7 +33,7 @@ def make_heatmap(
     no_numbers=False,
     log2_scale=False,
 ):
-    """Generate a heatmap using the R package pheatmap.
+    """Draw a heatmap of a CSV matrix (and write an equivalent pheatmap R script).
 
     The input is a comma-separated table with a header; its first column is
     used as row names. Clustering remains disabled, matching the historical
@@ -101,23 +105,28 @@ def make_heatmap(
             + ", sep=',', header=TRUE, row.names=1, check.names=FALSE)"
         ),
         "pheatmap(",
-        "    " + ",\\n    ".join(args),
+        "    " + ",\n    ".join(args),
         ")",
         "",
     ]
 
-    r_file.write_text("\\n".join(r_code), encoding="utf-8")
+    r_file.write_text("\n".join(r_code), encoding="utf-8")
 
-    logging.info('Running R script file "%s"', r_file)
-    try:
-        subprocess.run(["Rscript", str(r_file)], check=True)
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(
-            "Rscript was not found. Install R or ensure Rscript is on PATH."
-        ) from exc
-    except subprocess.CalledProcessError:
-        logging.exception('R script failed: "%s"', r_file)
-        raise
+    import csv
+
+    from qcmodule import plotting
+
+    with infile.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.reader(handle))
+    col_names = rows[0][1:]
+    row_names = [row[0] for row in rows[1:]]
+    matrix = [[float(value) for value in row[1:]] for row in rows[1:]]
+    plotting.matrix_heatmap(
+        row_names, col_names, matrix, heatmap_file,
+        cell_width=cell_width, cell_height=cell_height, col_angle=col_angle,
+        font_size=font_size, text_color=text_color,
+        show_numbers=not no_numbers, log2_scale=log2_scale,
+    )
 
     logging.info('Heatmap saved to "%s"', heatmap_file)
     return heatmap_file

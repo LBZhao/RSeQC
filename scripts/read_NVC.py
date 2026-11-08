@@ -8,12 +8,11 @@
 from __future__ import annotations
 
 import argparse
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
 from qcmodule import SAM
+from qcmodule import plotting
 from importlib.metadata import version
 
 __version__ = version("RSeQC")
@@ -80,13 +79,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-plot",
         action="store_true",
-        help="Generate NVC data but do not execute the R plotting script.",
+        help="Write the data files (and the R script) but do not draw plots.",
     )
     parser.add_argument(
         "--rscript",
         default="Rscript",
         metavar="PATH",
-        help="Rscript executable to use. Default: %(default)s",
+        help="Ignored: plots are drawn in Python since RSeQC 5.1.0 (R is not needed).",
     )
     parser.add_argument(
         "--version",
@@ -127,41 +126,6 @@ def validate_args(
         parser.error(f"output parent is not a directory: {output_parent}")
 
 
-def run_plot_script(
-    parser: argparse.ArgumentParser,
-    output_prefix: Path,
-    rscript_executable: str,
-) -> None:
-    """Execute the generated R plotting script safely."""
-    script_path = Path(f"{output_prefix}.NVC_plot.r")
-
-    if not script_path.is_file():
-        parser.exit(
-            1,
-            f"{parser.prog}: error: expected R script was not created: "
-            f"{script_path}\n",
-        )
-
-    resolved_rscript = shutil.which(rscript_executable)
-    if resolved_rscript is None:
-        parser.exit(
-            1,
-            f"{parser.prog}: error: Rscript executable not found: "
-            f"{rscript_executable}\n",
-        )
-
-    try:
-        subprocess.run(
-            [resolved_rscript, str(script_path)],
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        parser.exit(
-            exc.returncode or 1,
-            f"{parser.prog}: error: R plotting failed for {script_path}\n",
-        )
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Run nucleotide-versus-cycle analysis."""
     parser = build_parser()
@@ -176,7 +140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         alignment = SAM.ParseBAM(str(args.input_file))
-        alignment.readsNVC(
+        plot_data = alignment.readsNVC(
             outfile=str(args.output_prefix),
             nx=args.unknown_nucleotide,
             q_cut=args.map_qual,
@@ -185,11 +149,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.exit(1, f"{parser.prog}: error: {exc}\n")
 
     if not args.skip_plot:
-        run_plot_script(
-            parser=parser,
-            output_prefix=args.output_prefix,
-            rscript_executable=args.rscript,
-        )
+        plotting.run(parser, lambda: plotting.nucleotide_composition(plot_data, f"{args.output_prefix}.NVC_plot.pdf"))
 
     return 0
 

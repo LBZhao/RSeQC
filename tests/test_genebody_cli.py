@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -101,8 +100,7 @@ def test_cli_rejects_bad_length_bins(dataset):
     assert "--length-bins" in result.stderr
 
 
-@pytest.mark.skipif(shutil.which("Rscript") is None, reason="R not installed")
-def test_cli_plots_with_r(dataset):
+def test_cli_plots_without_r(dataset):
     tmp_path, bed, bams = dataset
     prefix = tmp_path / "plot"
     run_cli("-i", ",".join(map(str, bams)), "-r", bed, "-o", prefix,
